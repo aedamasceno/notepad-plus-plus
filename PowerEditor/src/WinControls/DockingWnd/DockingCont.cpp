@@ -128,7 +128,7 @@ DockedWidgetData* DockingCont::createDockedWidget(const DockedWidgetData& data)
 	::SetParent(pTbData->hClient, ::GetDlgItem(_hSelf, IDC_CLIENT_TAB));
 
 	// set names for captions and view toolbar
-	viewToolbar(pTbData);
+	viewDockedWidget(pTbData);
 
 	// attach to list
 	_dwDataVect.push_back(pTbData);
@@ -875,7 +875,7 @@ LRESULT DockingCont::runProcTab(HWND hwnd, UINT Message, WPARAM wParam, LPARAM l
 			// notify child windows
 			if (NotifyParent(DMM_CLOSE) == 0)
 			{
-				hideToolbar((DockedWidgetData*)tcItem.lParam);
+				hideDockedWidget((DockedWidgetData*)tcItem.lParam);
 			}
 			return 0;
 		}
@@ -1466,7 +1466,7 @@ void DockingCont::doClose(BOOL closeAll)
 		if (NotifyParent(DMM_CLOSE) == 0)
 		{
 			// delete tab
-			hideToolbar((DockedWidgetData*)item.lParam);
+			hideDockedWidget((DockedWidgetData*)item.lParam);
 		}
 	}
 
@@ -1489,7 +1489,7 @@ void DockingCont::doClose(BOOL closeAll)
 			if (NotifyParent(DMM_CLOSE) == 0)
 			{
 				// delete tab
-				hideToolbar((DockedWidgetData*)tcItem.lParam);
+				hideDockedWidget((DockedWidgetData*)tcItem.lParam);
 			}
 			else
 			{
@@ -1512,15 +1512,15 @@ void DockingCont::showDockedWidget(DockedWidgetData* pTbData, BOOL state)
 {
 	if (state == SW_SHOW)
 	{
-		viewToolbar(pTbData);
+		viewDockedWidget(pTbData);
 	}
 	else
 	{
-		hideToolbar(pTbData);
+		hideDockedWidget(pTbData);
 	}
 }
 
-int DockingCont::hideToolbar(DockedWidgetData *pTbData, BOOL hideClient)
+int DockingCont::hideDockedWidget(DockedWidgetData *pTbData, BOOL hideClient)
 {
 	int iItem = searchPosInTab(pTbData);
 	BOOL hadFocus = ::IsChild (pTbData->hClient, ::GetFocus());
@@ -1573,7 +1573,7 @@ int DockingCont::hideToolbar(DockedWidgetData *pTbData, BOOL hideClient)
 	return iItem;
 }
 
-void DockingCont::viewToolbar(DockedWidgetData *pTbData)
+void DockingCont::viewDockedWidget(DockedWidgetData *pTbData)
 {
 	TCITEM tcItem {};
 	int iItemCnt = static_cast<int32_t>(::SendMessage(_hContTab, TCM_GETITEMCOUNT, 0, 0));

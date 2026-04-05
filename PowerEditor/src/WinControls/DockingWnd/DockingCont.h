@@ -158,17 +158,18 @@ protected:
 	// functions for caption handling and drawing
 	eMousePos isInRect(HWND hwnd, int x, int y);
 
-	// handling of toolbars
+	// handling of docked widgets
 	void doClose(BOOL closeAll);
 
 	// return new item
 	int  searchPosInTab(DockedWidgetData* pTbData);
 	void selectTab(int iTab);
 
-	int  hideToolbar(DockedWidgetData* pTbData, BOOL hideClient = TRUE);
-	void viewToolbar(DockedWidgetData *pTbData);
+	int  hideDockedWidget(DockedWidgetData* pTbData, BOOL hideClient = TRUE);
+	void viewDockedWidget(DockedWidgetData *pTbData);
+
 	int  removeTab(DockedWidgetData* pTbData) {
-		return hideToolbar(pTbData, FALSE);
+		return hideDockedWidget(pTbData, FALSE);
 	}
 
 	bool updateCaption();

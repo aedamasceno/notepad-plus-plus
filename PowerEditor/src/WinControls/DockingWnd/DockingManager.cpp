@@ -231,7 +231,7 @@ LRESULT DockingManager::runProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
 		case WM_NCACTIVATE:
 		{
-			// activate/deactivate titlebar of toolbars
+			// activate/deactivate titlebar of docked widgets
 			for (size_t iCont = DOCKCONT_MAX, len = _vContainer.size(); iCont < len; ++iCont)
 			{
 				::SendMessage(_vContainer[iCont]->getHSelf(), WM_NCACTIVATE, wParam, static_cast<LPARAM>(-1));
@@ -662,7 +662,7 @@ void DockingManager::createDockableDlg(DockedWidgetData data, int iCont, bool is
 		}
 	}
 
-	// attach toolbar
+	// attach docked widget
 	if (_vContainer.size() > static_cast<size_t>(iCont) && _vContainer[iCont] != nullptr)
 	{
 		_vContainer[iCont]->createDockedWidget(data);
@@ -805,7 +805,7 @@ DockingCont* DockingManager::toggleActiveTb(DockingCont* pContSrc, UINT message,
 	// notify client app
 	SendNotify(TbData.hClient, MAKELONG(message==DMM_DOCK?DMN_DOCK:DMN_FLOAT, GetContainer(pContTgt)));
 
-	// remove toolbar from source
+	// remove docked widget from source
 	_vContainer[iContSrc]->removeDockedWidget(TbData);
 
 	return pContTgt;
@@ -862,7 +862,7 @@ DockingCont* DockingManager::toggleVisTb(DockingCont* pContSrc, UINT message, LP
 
 		SendNotify(TbData.hClient, MAKELONG(message==DMM_DOCK?DMN_DOCK:DMN_FLOAT, GetContainer(pContTgt)));
 
-		// remove toolbar from anywhere
+		// remove docked widget from anywhere
 		_vContainer[iContSrc]->removeDockedWidget(TbData);
 	}
 
@@ -914,10 +914,10 @@ void DockingManager::toggleTb(DockingCont* pContSrc, DockingCont* pContTgt, Dock
 	else
 		SendNotify(TbData.hClient, MAKELONG(DMN_FLOAT, iContTgt));
 
-	// create new toolbar
+	// create new docked widget
 	pContTgt->createDockedWidget(TbData);
 
-	// remove toolbar from source
+	// remove docked widget from source
 	_vContainer[iContSrc]->removeDockedWidget(TbData);
 }
 
