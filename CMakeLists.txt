@@ -3,3 +3,7 @@ project(NPP_Linux_Qt6 LANGUAGES CXX)
 
 # Add the Linux‑specific Qt 6 target
 add_subdirectory(linux)
+
+# Ensure Scintilla headers are found during compilation.
+# The Scintilla source tree is located at `scintilla/include`.
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/scintilla/include)
