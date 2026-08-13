@@ -46,6 +46,9 @@ target_include_directories(npp_linux PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEdit"
 )
 
+# Define the macro that enables Qt specific code in Scintilla
+target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT)
+
 target_link_libraries(npp_linux PRIVATE Qt6::Widgets)
 
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD 17)
