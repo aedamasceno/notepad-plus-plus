@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(npp_linux LANGUAGES CXX)
 
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Core5Compat REQUIRED)
 
 # Enable Qt meta‑object compilation
 set(CMAKE_AUTOMOC ON)
@@ -50,7 +50,7 @@ target_include_directories(npp_linux PRIVATE
 # Define the macro that enables Qt specific code in Scintilla
 target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT)
 
-target_link_libraries(npp_linux PRIVATE Qt6::Widgets)
+target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
 
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD 17)
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD_REQUIRED ON)
