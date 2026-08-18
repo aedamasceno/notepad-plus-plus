@@ -11,28 +11,28 @@ set(CMAKE_AUTOUIC ON)
 # ------------------------------------------------------------------
 # Gather all Scintilla core sources (C and C++)
 file(GLOB_RECURSE SCINTILLA_CORE_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/src/*.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/src/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/src/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/src/*.cpp"
 )
 
 # Gather the Qt wrapper sources for the widget base
 file(GLOB_RECURSE QT_EDIT_BASE_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEditBase/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase/*.cpp"
 )
 file(GLOB_RECURSE QT_EDIT_BASE_HEADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEditBase/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase/*.h"
 )
 
 # Gather the Qt wrapper sources for the widget itself
 file(GLOB_RECURSE QT_EDIT_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEdit/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEdit/*.cpp"
 )
 file(GLOB_RECURSE QT_EDIT_HEADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEdit/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEdit/*.h"
 )
 
 # ------------------------------------------------------------------
-add_executable(npp_linux main.cpp
+add_executable(npp_linux linux/main.cpp
     ${SCINTILLA_CORE_SOURCES}
     ${QT_EDIT_BASE_SOURCES}
     ${QT_EDIT_BASE_HEADERS}
@@ -41,10 +41,10 @@ add_executable(npp_linux main.cpp
 )
 
 target_include_directories(npp_linux PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEditBase"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEdit"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEdit"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/include"
 )
 
 # Define the macro that enables Qt specific code in Scintilla
