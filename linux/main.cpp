@@ -13,6 +13,7 @@
 #include <QCloseEvent>
 #include <QStatusBar>
 #include <QVBoxLayout>
+#include <QWidget>
 #include "ScintillaEditBase.h"
 
 class DocumentTab : public QWidget {
