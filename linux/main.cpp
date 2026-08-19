@@ -46,6 +46,21 @@ private:
     ScintillaEditBase* editor;
     QString currentFilePath;
 
+    // Menu objects
+    QMenu *fileMenu;
+    QMenu *editMenu;
+    QMenu *searchMenu;
+    QMenu *viewMenu;
+    QMenu *encodingMenu;
+    QMenu *languageMenu;
+    QMenu *settingsMenu;
+    QMenu *toolsMenu;
+    QMenu *macroMenu;
+    QMenu *runMenu;
+    QMenu *pluginsMenu;
+    QMenu *windowMenu;
+    QMenu *helpMenu;
+
     // File menu actions
     QAction *newAction;
     QAction *openAction;
@@ -73,43 +88,43 @@ void MainWindow::setupUI() {
     QMenuBar* menuBar = this->menuBar();
     
     // File menu
-    QMenu* fileMenu = menuBar->addMenu("&File");
+    fileMenu = menuBar->addMenu("&File");
     
     // Edit menu
-    QMenu* editMenu = menuBar->addMenu("&Edit");
+    editMenu = menuBar->addMenu("&Edit");
     
     // Search menu
-    QMenu* searchMenu = menuBar->addMenu("&Search");
+    searchMenu = menuBar->addMenu("&Search");
     
     // View menu
-    QMenu* viewMenu = menuBar->addMenu("&View");
+    viewMenu = menuBar->addMenu("&View");
     
     // Encoding menu
-    QMenu* encodingMenu = menuBar->addMenu("&Encoding");
+    encodingMenu = menuBar->addMenu("&Encoding");
     
     // Language menu
-    QMenu* languageMenu = menuBar->addMenu("&Language");
+    languageMenu = menuBar->addMenu("&Language");
     
     // Settings menu
-    QMenu* settingsMenu = menuBar->addMenu("&Settings");
+    settingsMenu = menuBar->addMenu("&Settings");
     
     // Tools menu
-    QMenu* toolsMenu = menuBar->addMenu("&Tools");
+    toolsMenu = menuBar->addMenu("&Tools");
     
     // Macro menu
-    QMenu* macroMenu = menuBar->addMenu("&Macro");
+    macroMenu = menuBar->addMenu("&Macro");
     
     // Run menu
-    QMenu* runMenu = menuBar->addMenu("&Run");
+    runMenu = menuBar->addMenu("&Run");
     
     // Plugins menu
-    QMenu* pluginsMenu = menuBar->addMenu("&Plugins");
+    pluginsMenu = menuBar->addMenu("&Plugins");
     
     // Window menu
-    QMenu* windowMenu = menuBar->addMenu("&Window");
+    windowMenu = menuBar->addMenu("&Window");
     
     // Help menu
-    QMenu* helpMenu = menuBar->addMenu("&?");
+    helpMenu = menuBar->addMenu("&?");
     
     // Create toolbar container
     QToolBar* toolBar = addToolBar("Main Toolbar");
@@ -147,21 +162,21 @@ void MainWindow::setupActions() {
     connect(selectAllAction, &QAction::triggered, this, &MainWindow::selectAll);
 
     // Add actions to menus
-    menuBar()->findChild<QMenu*>("&File")->addAction(newAction);
-    menuBar()->findChild<QMenu*>("&File")->addAction(openAction);
-    menuBar()->findChild<QMenu*>("&File")->addAction(saveAction);
-    menuBar()->findChild<QMenu*>("&File")->addAction(saveAsAction);
-    menuBar()->findChild<QMenu*>("&File")->addSeparator();
-    menuBar()->findChild<QMenu*>("&File")->addAction(exitAction);
+    fileMenu->addAction(newAction);
+    fileMenu->addAction(openAction);
+    fileMenu->addAction(saveAction);
+    fileMenu->addAction(saveAsAction);
+    fileMenu->addSeparator();
+    fileMenu->addAction(exitAction);
 
-    menuBar()->findChild<QMenu*>("&Edit")->addAction(undoAction);
-    menuBar()->findChild<QMenu*>("&Edit")->addAction(redoAction);
-    menuBar()->findChild<QMenu*>("&Edit")->addSeparator();
-    menuBar()->findChild<QMenu*>("&Edit")->addAction(cutAction);
-    menuBar()->findChild<QMenu*>("&Edit")->addAction(copyAction);
-    menuBar()->findChild<QMenu*>("&Edit")->addAction(pasteAction);
-    menuBar()->findChild<QMenu*>("&Edit")->addSeparator();
-    menuBar()->findChild<QMenu*>("&Edit")->addAction(selectAllAction);
+    editMenu->addAction(undoAction);
+    editMenu->addAction(redoAction);
+    editMenu->addSeparator();
+    editMenu->addAction(cutAction);
+    editMenu->addAction(copyAction);
+    editMenu->addAction(pasteAction);
+    editMenu->addSeparator();
+    editMenu->addAction(selectAllAction);
 
     // Add actions to toolbar
     addToolBarBreak();
