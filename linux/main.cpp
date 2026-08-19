@@ -56,8 +56,8 @@ private:
             updateTitle();
         });
         
-        // Connect text change signals for session management
-        connect(editor, &ScintillaEditBase::textChanged, this, &DocumentTab::onTextChanged);
+        // Connect modification signal for session management
+        connect(editor, &ScintillaEditBase::modified, this, &DocumentTab::onTextChanged);
     }
 
     void updateTitle() {
@@ -66,6 +66,22 @@ private:
     
     void onTextChanged() {
         // This will be handled by the MainWindow's session manager
+        if (m_sessionManager) {
+            // Get current content from editor
+            Scintilla::Position length = editor->send(SCI_GETTEXTLENGTH);
+            if (length > 0) {
+                char* buffer = new char[length + 1];
+                editor->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
+                QString content(buffer);
+                delete[] buffer;
+                
+                // Update session manager with current content
+                m_sessionManager->updateUntitledDocumentContent(tabNumber, content);
+            } else {
+                // Empty document
+                m_sessionManager->updateUntitledDocumentContent(tabNumber, "");
+            }
+        }
     }
 
 signals:
@@ -76,6 +92,9 @@ private:
     QString currentFilePath;
     bool isModified;
     int tabNumber;
+    
+    // Session manager pointer - will be set by MainWindow
+    SessionManager* m_sessionManager = nullptr;
 };
 
 class MainWindow : public QMainWindow {
@@ -778,6 +797,8 @@ void MainWindow::createNewTab(const QString& filePath) {
         // Add to session manager
         if (m_sessionManager) {
             m_sessionManager->addUntitledDocument("", nextUntitledNumber - 1);
+            // Set the session manager pointer in the tab
+            newTab->m_sessionManager = m_sessionManager;
         }
     } else {
         // Check if file is already open
