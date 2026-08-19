@@ -1,50 +1,58 @@
-What is Notepad++ ?
-===================
+# 🐧 Notepad++ Native Linux Port
 
-[![GitHub release](https://img.shields.io/github/release/notepad-plus-plus/notepad-plus-plus.svg)](../../releases/latest)&nbsp;&nbsp;&nbsp;&nbsp;[![Build Status](https://img.shields.io/github/actions/workflow/status/notepad-plus-plus/notepad-plus-plus/CI_build.yml)](https://github.com/notepad-plus-plus/notepad-plus-plus/actions/workflows/CI_build.yml)
-&nbsp;&nbsp;&nbsp;&nbsp;[![Join the discussions at https://community.notepad-plus-plus.org/](https://notepad-plus-plus.org/assets/images/NppCommunityBadge.svg)](https://community.notepad-plus-plus.org/)
+### Experimental native Linux port of Notepad++ using Qt 6 and Scintilla
 
-Notepad++ is a free (free as in both "free speech" and "free beer") source code
-editor and Notepad replacement that supports several programming languages and
-natural languages. Running in the MS Windows environment, its use is governed by
-[GPL License](LICENSE).
+> No Wine required.  
+> This project is under active development and is not yet production-ready.
 
-See the [Notepad++ official site](https://notepad-plus-plus.org/) for more information.
+## Why This Exists
+
+As a longtime Notepad++ user and now a full-time Linux user, I was surprised that I couldn't find a native Linux editor that gave me everything I had grown accustomed to in Notepad++. I tried several alternatives, but there was always a feature missing or something that simply didn't work the way I was used to.
+
+Since Notepad++ is open source, I decided to take on the challenge of porting it to Linux myself.
+
+I want to be clear about credit: **Notepad++ and the work that makes this project possible belong to its original creators and contributors.** I did not create Notepad++. My goal is simply to bring the Notepad++ experience I know and love to Linux natively.
+
+## Current Status
+
+Working today:
+
+- Native Qt 6 application
+- Scintilla editor
+- Multiple document tabs
+- New / Open / Save
+- Undo / Redo
+- Cut / Copy / Paste
+- Find / Replace
+- Dirty-state tracking
+- Tab close buttons
+- Status bar
+- Native Notepad++ toolbar icons
+
+Still in progress:
+
+- Remaining toolbar actions
+- Advanced search
+- Syntax highlighting integration
+- Preferences
+- Sessions
+- Printing
+- Dark mode
+- Plugins
+- Linux packaging and desktop integration
+
+## Build
+
+```bash
+cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-linux -j$(nproc)
+./build-linux/npp_linux
 
 
-Notepad++ GPG Release Key
--------------------------
-_Since the release of version 7.6.5 Notepad++ is signed using GPG with the following key:_
+## More Information
 
-- **Signer:** Notepad++
-- **E-mail:** don.h@free.fr
-- **Key ID:** 0x8D84F46E
-- **Key fingerprint:** 14BC E436 2749 B2B5 1F8C 7122 6C42 9F1D 8D84 F46E
-- **Key type:** RSA 4096/4096
-- **Created:** 2019-03-11
-- **Expires:** 2027-03-13
+See [LINUX-PORT.md](LINUX-PORT.md) for the project overview, roadmap, contribution notes, and architecture details.
 
-https://github.com/notepad-plus-plus/notepad-plus-plus/blob/master/nppGpgPub.asc
+## Contributing
 
-
-Supported OS
-------------
-
-All the Windows systems still supported by Microsoft are supported by Notepad++. However, not all Notepad++ users can or want to use the newest system. Here is the [Supported systems information](SUPPORTED_SYSTEM.md) you may need in case you are one of them.
-
-
-
-
-Build Notepad++
----------------
-
-Please follow [build guide](BUILD.md) to build Notepad++ from source.
-
-
-Contribution
-------------
-
-Contributions are welcome. Be mindful of our [Contribution Rules](CONTRIBUTING.md) to increase the likelihood of your contribution getting accepted.
-
-[Notepad++ Contributors](https://github.com/notepad-plus-plus/notepad-plus-plus/graphs/contributors)
-
+Contributions, testing, bug reports, and technical discussion are welcome.
