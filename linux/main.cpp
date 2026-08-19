@@ -962,7 +962,7 @@ void MainWindow::saveSession() {
 }
 
 void MainWindow::loadSession() {
-    // Create session manager
+    // Create session manager first
     m_sessionManager = new SessionManager(this);
     
     // Load existing session on startup
@@ -970,10 +970,62 @@ void MainWindow::loadSession() {
     
     // Restore untitled tabs from session if they exist
     if (m_sessionManager->hasUntitledDocuments()) {
-        // For now, we'll just create a new tab to ensure at least one exists
-        // In a full implementation, this would restore the actual content from backup files
+        QJsonArray untitledTabs = m_sessionManager->getUntitledTabs();
+        
+        // Create all tabs in order
+        for (int i = 0; i < untitledTabs.size(); ++i) {
+            QJsonObject tabObj = untitledTabs[i].toObject();
+            int tabNumber = tabObj["tabNumber"].toInt();
+            QString backupPath = tabObj["backupPath"].toString();
+            
+            // Read content from backup file
+            QFile backupFile(backupPath);
+            QString content;
+            if (backupFile.open(QIODevice::ReadOnly)) {
+                QTextStream in(&backupFile);
+                content = in.readAll();
+                backupFile.close();
+            }
+            
+            // Create tab with the original tab number
+            DocumentTab* newTab = new DocumentTab("", tabNumber, this);
+            connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
+            connect(newTab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
+            
+            // Load content into editor
+            newTab->getEditor()->send(SCI_CLEARALL);
+            newTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.toStdString().c_str()));
+            
+            // Set session manager pointer
+            newTab->setSessionManager(m_sessionManager);
+            
+            // Add to tab widget
+            QString title = QString("new %1").arg(tabNumber);
+            int index = tabWidget->addTab(newTab, title);
+            
+            // Update tab text to include asterisk if needed
+            documentTitleChanged();
+        }
+        
+        // Restore active tab
+        int activeTabNumber = m_sessionManager->getActiveTabNumber();
+        if (activeTabNumber > 0) {
+            // Find the tab with this number and make it active
+            for (int i = 0; i < tabWidget->count(); ++i) {
+                DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
+                if (tab && tab->getTabNumber() == activeTabNumber) {
+                    tabWidget->setCurrentIndex(i);
+                    break;
+                }
+            }
+        }
+        
+        // Don't create a new tab if we already restored some
         return;
     }
+    
+    // If no session to restore, create a fresh tab
+    createNewTab();
 }
 
 // Find/Replace functions
@@ -1160,29 +1212,22 @@ void MainWindow::replaceAll() {
         searchFlags |= SCFIND_WHOLEWORD;
     }
     
-    // Begin undo action
-    editor->send(SCI_BEGINUNDOACTION);
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
     
-    // Set target to entire document
+    // Perform search and replace all
     editor->send(SCI_SETTARGETSTART, 0);
     editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
     editor->send(SCI_SETSEARCHFLAGS, searchFlags);
     
-    // Replace all occurrences
-    Scintilla::Position replaceCount = editor->send(SCI_REPLACETARGET, 
-        static_cast<Scintilla::Position>(replaceText.length()), 
-        reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+    int result = editor->send(SCI_REPLACETARGET, -1, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
     
-    // End undo action
-    editor->send(SCI_ENDUNDOACTION);
-    
-    if (replaceCount > 0) {
-        QMessageBox::information(this, "Replace All", QString("%1 occurrences replaced").arg(replaceCount));
-    }
+    // Update status bar
+    updateStatusBar();
 }
 
 void MainWindow::findReplaceClosed() {
-    // Nothing to do here for now
+    // No implementation needed for this function
 }
 
 int main(int argc, char *argv[])
@@ -1190,7 +1235,6 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
 
     MainWindow window;
-    window.resize(800, 600);
     window.show();
 
     return app.exec();

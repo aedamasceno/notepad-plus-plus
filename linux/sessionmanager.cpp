@@ -69,26 +69,53 @@ void SessionManager::clearSession()
 
 void SessionManager::addUntitledDocument(const QString& content, int tabNumber)
 {
-    // Create backup file
-    QString backupPath = getBackupFilePath(tabNumber);
+    // Check if this tab number already exists
+    bool exists = false;
+    for (int i = 0; i < m_untitledTabs.size(); ++i) {
+        QJsonObject tabObj = m_untitledTabs[i].toObject();
+        if (tabObj["tabNumber"].toInt() == tabNumber) {
+            exists = true;
+            // Update existing entry
+            QString backupPath = tabObj["backupPath"].toString();
+            m_backupFiles[tabNumber] = backupPath;
+            
+            // Update the content in backup file
+            QSaveFile saveFile(backupPath);
+            if (saveFile.open(QIODevice::WriteOnly)) {
+                QTextStream stream(&saveFile);
+                stream << content;
+                saveFile.commit();
+            }
+            
+            // Update JSON array entry
+            tabObj["backupPath"] = backupPath;
+            m_untitledTabs[i] = tabObj;
+            break;
+        }
+    }
     
-    // Save content to backup file
-    QSaveFile saveFile(backupPath);
-    if (saveFile.open(QIODevice::WriteOnly)) {
-        QTextStream stream(&saveFile);
-        stream << content;
-        saveFile.commit();
+    if (!exists) {
+        // Create backup file
+        QString backupPath = getBackupFilePath(tabNumber);
         
-        m_backupFiles[tabNumber] = backupPath;
-        
-        // Add to session data
-        QJsonObject tabData;
-        tabData["tabNumber"] = tabNumber;
-        tabData["backupPath"] = backupPath;
-        m_untitledTabs.append(tabData);
-        
-        m_shouldSaveSession = true;
-        m_backupTimer->start();
+        // Save content to backup file
+        QSaveFile saveFile(backupPath);
+        if (saveFile.open(QIODevice::WriteOnly)) {
+            QTextStream stream(&saveFile);
+            stream << content;
+            saveFile.commit();
+            
+            m_backupFiles[tabNumber] = backupPath;
+            
+            // Add to session data
+            QJsonObject tabData;
+            tabData["tabNumber"] = tabNumber;
+            tabData["backupPath"] = backupPath;
+            m_untitledTabs.append(tabData);
+            
+            m_shouldSaveSession = true;
+            m_backupTimer->start();
+        }
     }
 }
 
@@ -217,4 +244,14 @@ void SessionManager::loadSessionFile()
     if (sessionObject.contains("untitledTabs") && sessionObject["untitledTabs"].isArray()) {
         m_untitledTabs = sessionObject["untitledTabs"].toArray();
     }
+}
+
+int SessionManager::getActiveTabNumber() const
+{
+    return m_activeTabNumber;
+}
+
+QJsonArray SessionManager::getUntitledTabs() const
+{
+    return m_untitledTabs;
 }

@@ -28,6 +28,10 @@ public:
     
     // For application shutdown
     void shutdown();
+    
+    // Accessors for session data
+    int getActiveTabNumber() const;
+    QJsonArray getUntitledTabs() const;
 
 private:
     QString getSessionDir() const;
