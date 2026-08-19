@@ -18,8 +18,8 @@ class DocumentTab : public QWidget {
     Q_OBJECT
 
 public:
-    DocumentTab(const QString& filePath = "", QWidget* parent = nullptr) 
-        : QWidget(parent), currentFilePath(filePath), isModified(false) {
+    DocumentTab(const QString& filePath = "", int tabNumber = 0, QWidget* parent = nullptr) 
+        : QWidget(parent), currentFilePath(filePath), isModified(false), tabNumber(tabNumber) {
         setupUI();
         setupActions();
         updateTitle();
@@ -30,6 +30,7 @@ public:
     bool isDirty() const { return isModified; }
     void setDirty(bool dirty) { isModified = dirty; updateTitle(); }
     void setFilePath(const QString& path) { currentFilePath = path; updateTitle(); }
+    int getTabNumber() const { return tabNumber; }
 
 private:
     void setupUI() {
@@ -61,6 +62,7 @@ private:
     ScintillaEditBase* editor;
     QString currentFilePath;
     bool isModified;
+    int tabNumber;
 };
 
 class MainWindow : public QMainWindow {
@@ -379,11 +381,8 @@ void MainWindow::documentTitleChanged() {
         if (index != -1) {
             QString title;
             if (tab->getFilePath().isEmpty()) {
-                // For untitled documents, use the sequential naming
-                // The number should be based on when the tab was created, not the current counter
-                // We need to track this differently - for now we'll just use a simple approach
-                // that maintains the correct sequence
-                title = QString("new %1").arg(nextUntitledNumber - 1);
+                // For untitled documents, use the tab number that was assigned
+                title = QString("new %1").arg(tab->getTabNumber());
             } else {
                 title = QFileInfo(tab->getFilePath()).fileName();
             }
@@ -397,7 +396,7 @@ void MainWindow::documentTitleChanged() {
 }
 
 void MainWindow::createNewTab(const QString& filePath) {
-    DocumentTab* newTab = new DocumentTab(filePath, this);
+    DocumentTab* newTab = new DocumentTab(filePath, nextUntitledNumber, this);
     
     // Connect the tab's titleChanged signal to update the tab text
     connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
