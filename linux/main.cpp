@@ -102,7 +102,7 @@ private slots:
     void paste();
     void selectAll();
     void find();
-    void replace();
+    void showReplaceDialog();
 
     // Tab management
     void tabChanged(int index);
@@ -271,7 +271,7 @@ void MainWindow::setupActions() {
 
     // Connect search actions
     connect(findAction, &QAction::triggered, this, &MainWindow::find);
-    connect(replaceAction, &QAction::triggered, this, &MainWindow::replace);
+    connect(replaceAction, &QAction::triggered, this, &MainWindow::showReplaceDialog);
 
     // Connect tab signals
     connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
@@ -429,7 +429,7 @@ void MainWindow::find() {
     findReplaceDialog->activateWindow();
 }
 
-void MainWindow::replace() {
+void MainWindow::showReplaceDialog() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
     
