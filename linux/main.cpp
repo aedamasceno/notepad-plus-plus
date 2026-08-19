@@ -148,6 +148,8 @@ private:
 
 void MainWindow::setupUI() {
     tabWidget = new QTabWidget(this);
+    // Enable close buttons on tabs
+    tabWidget->setTabsClosable(true);
     setCentralWidget(tabWidget);
     
     // Set window title
