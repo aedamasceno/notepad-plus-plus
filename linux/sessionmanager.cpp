@@ -243,6 +243,19 @@ void SessionManager::loadSessionFile()
     // Load untitled tabs
     if (sessionObject.contains("untitledTabs") && sessionObject["untitledTabs"].isArray()) {
         m_untitledTabs = sessionObject["untitledTabs"].toArray();
+        
+        // Rebuild backup files map from loaded data
+        m_backupFiles.clear();
+        for (int i = 0; i < m_untitledTabs.size(); ++i) {
+            QJsonObject tabObj = m_untitledTabs[i].toObject();
+            int tabNumber = tabObj["tabNumber"].toInt();
+            QString backupPath = tabObj["backupPath"].toString();
+            
+            // Only add to backup files map if both values are valid
+            if (tabNumber > 0 && !backupPath.isEmpty()) {
+                m_backupFiles[tabNumber] = backupPath;
+            }
+        }
     }
 }
 

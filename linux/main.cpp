@@ -107,7 +107,6 @@ public:
         setupActions();
         // Load session on startup
         loadSession();
-        createNewTab(); // Ensure at least one tab exists
         findReplaceDialog = new FindReplaceDialog(this);
         connect(findReplaceDialog, &FindReplaceDialog::findNext, this, &MainWindow::findNext);
         connect(findReplaceDialog, &FindReplaceDialog::findPrevious, this, &MainWindow::findPrevious);
