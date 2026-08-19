@@ -139,10 +139,6 @@ void FindReplaceDialog::showReplace() {
     replaceButton->setVisible(true);
     replaceAllButton->setVisible(true);
     
-    // Adjust layout
-    inputLayout->addWidget(new QLabel("Replace with:"), 1, 0);
-    inputLayout->addWidget(replaceLineEdit, 1, 1);
-    
     setWindowTitle("Find and Replace");
     adjustSize();
 }
@@ -153,29 +149,6 @@ void FindReplaceDialog::showFind() {
     replaceButton->setVisible(false);
     replaceAllButton->setVisible(false);
     
-    // Adjust layout
-    if (inputLayout->count() > 2) {  // Remove replace line if exists
-        QLayoutItem *item = inputLayout->itemAtPosition(1, 0);
-        if (item) {
-            QWidget *widget = item->widget();
-            if (widget && widget->text() == "Replace with:") {
-                inputLayout->removeWidget(widget);
-                delete widget;
-                
-                item = inputLayout->itemAtPosition(1, 1);
-                if (item) {
-                    QWidget *widget2 = item->widget();
-                    if (widget2) {
-                        inputLayout->removeWidget(widget2);
-                        delete widget2;
-                    }
-                }
-            }
-        }
-    }
-    
     setWindowTitle("Find");
     adjustSize();
 }
-
-#include "findreplace.moc"
