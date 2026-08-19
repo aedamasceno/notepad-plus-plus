@@ -102,7 +102,6 @@ private slots:
     void paste();
     void selectAll();
     void find();
-    void replace();
 
     // Tab management
     void tabChanged(int index);
@@ -166,7 +165,6 @@ private:
     
     // Search menu actions
     QAction *findAction;
-    QAction *replaceAction;
     
     // Counter for untitled documents
     int nextUntitledNumber;
@@ -252,7 +250,6 @@ void MainWindow::setupActions() {
 
     // Search actions
     findAction = new QAction("&Find", this);
-    replaceAction = new QAction("&Replace", this);
 
     // Connect file actions
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
@@ -271,7 +268,6 @@ void MainWindow::setupActions() {
 
     // Connect search actions
     connect(findAction, &QAction::triggered, this, &MainWindow::find);
-    connect(replaceAction, &QAction::triggered, this, &MainWindow::replace);
 
     // Connect tab signals
     connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
@@ -295,7 +291,6 @@ void MainWindow::setupActions() {
     editMenu->addAction(selectAllAction);
 
     searchMenu->addAction(findAction);
-    searchMenu->addAction(replaceAction);
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -310,7 +305,6 @@ void MainWindow::setupActions() {
     toolBar->addAction(pasteAction);
     toolBar->addSeparator();
     toolBar->addAction(findAction);
-    toolBar->addAction(replaceAction);
 
     // Set shortcuts
     newAction->setShortcut(QKeySequence::New);
@@ -324,7 +318,6 @@ void MainWindow::setupActions() {
     pasteAction->setShortcut(QKeySequence::Paste);
     selectAllAction->setShortcut(QKeySequence::SelectAll);
     findAction->setShortcut(QKeySequence::Find);
-    replaceAction->setShortcut(QKeySequence::Replace);
 }
 
 void MainWindow::newFile() {
@@ -423,18 +416,6 @@ void MainWindow::find() {
     
     // Show find dialog
     findReplaceDialog->showFind();
-    findReplaceDialog->setFindText("");
-    findReplaceDialog->show();
-    findReplaceDialog->raise();
-    findReplaceDialog->activateWindow();
-}
-
-void MainWindow::replace() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-    
-    // Show replace dialog
-    findReplaceDialog->showReplace();
     findReplaceDialog->setFindText("");
     findReplaceDialog->show();
     findReplaceDialog->raise();
@@ -718,9 +699,11 @@ void MainWindow::findNext() {
     // Set target range to search from current position to end of document
     editor->send(SCI_SETTARGETSTART, currentPos);
     editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
     
     // Perform search
-    Scintilla::Position foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
+        static_cast<Scintilla::Position>(findText.length()), 
         reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
     
     if (foundPos != -1) {
@@ -733,8 +716,10 @@ void MainWindow::findNext() {
         if (findReplaceDialog->wrapAround()) {
             editor->send(SCI_SETTARGETSTART, 0);
             editor->send(SCI_SETTARGETEND, currentPos);
+            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
             
-            foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+            foundPos = editor->send(SCI_SEARCHINTARGET, 
+                static_cast<Scintilla::Position>(findText.length()), 
                 reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
                 
             if (foundPos != -1) {
@@ -770,9 +755,11 @@ void MainWindow::findPrevious() {
     // Set target range to search from beginning to current position
     editor->send(SCI_SETTARGETSTART, 0);
     editor->send(SCI_SETTARGETEND, currentPos);
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
     
     // Perform search backwards
-    Scintilla::Position foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
+        static_cast<Scintilla::Position>(findText.length()), 
         reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
     
     if (foundPos != -1) {
@@ -785,8 +772,10 @@ void MainWindow::findPrevious() {
         if (findReplaceDialog->wrapAround()) {
             editor->send(SCI_SETTARGETSTART, currentPos);
             editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
             
-            foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+            foundPos = editor->send(SCI_SEARCHINTARGET, 
+                static_cast<Scintilla::Position>(findText.length()), 
                 reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
                 
             if (foundPos != -1) {
@@ -875,9 +864,11 @@ void MainWindow::replaceAll() {
     // Set target to entire document
     editor->send(SCI_SETTARGETSTART, 0);
     editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
     
     // Replace all occurrences
-    Scintilla::Position replaceCount = editor->send(SCI_REPLACETARGET, searchFlags, 
+    Scintilla::Position replaceCount = editor->send(SCI_REPLACETARGET, 
+        static_cast<Scintilla::Position>(replaceText.length()), 
         reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
     
     // End undo action
