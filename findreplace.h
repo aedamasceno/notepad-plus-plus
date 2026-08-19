@@ -9,6 +9,7 @@
 #include <QVBoxLayout>
 #include <QGridLayout>
 #include <QLabel>
+#include <QString>
 
 class FindReplaceDialog : public QDialog {
     Q_OBJECT
