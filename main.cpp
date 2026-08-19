@@ -102,6 +102,7 @@ private slots:
     void paste();
     void selectAll();
     void find();
+    void replace();
 
     // Tab management
     void tabChanged(int index);
@@ -165,6 +166,7 @@ private:
     
     // Search menu actions
     QAction *findAction;
+    QAction *replaceAction;
     
     // Counter for untitled documents
     int nextUntitledNumber;
@@ -250,6 +252,7 @@ void MainWindow::setupActions() {
 
     // Search actions
     findAction = new QAction("&Find", this);
+    replaceAction = new QAction("&Replace", this);
 
     // Connect file actions
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
@@ -268,6 +271,7 @@ void MainWindow::setupActions() {
 
     // Connect search actions
     connect(findAction, &QAction::triggered, this, &MainWindow::find);
+    connect(replaceAction, &QAction::triggered, this, &MainWindow::replace);
 
     // Connect tab signals
     connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
@@ -291,6 +295,7 @@ void MainWindow::setupActions() {
     editMenu->addAction(selectAllAction);
 
     searchMenu->addAction(findAction);
+    searchMenu->addAction(replaceAction);
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -305,6 +310,7 @@ void MainWindow::setupActions() {
     toolBar->addAction(pasteAction);
     toolBar->addSeparator();
     toolBar->addAction(findAction);
+    toolBar->addAction(replaceAction);
 
     // Set shortcuts
     newAction->setShortcut(QKeySequence::New);
@@ -318,6 +324,7 @@ void MainWindow::setupActions() {
     pasteAction->setShortcut(QKeySequence::Paste);
     selectAllAction->setShortcut(QKeySequence::SelectAll);
     findAction->setShortcut(QKeySequence::Find);
+    replaceAction->setShortcut(QKeySequence("Ctrl+H"));
 }
 
 void MainWindow::newFile() {
@@ -416,6 +423,18 @@ void MainWindow::find() {
     
     // Show find dialog
     findReplaceDialog->showFind();
+    findReplaceDialog->setFindText("");
+    findReplaceDialog->show();
+    findReplaceDialog->raise();
+    findReplaceDialog->activateWindow();
+}
+
+void MainWindow::replace() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    // Show replace dialog
+    findReplaceDialog->showReplace();
     findReplaceDialog->setFindText("");
     findReplaceDialog->show();
     findReplaceDialog->raise();
