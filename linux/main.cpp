@@ -255,6 +255,7 @@ void MainWindow::setupUI() {
     
     // Create toolbar container and store it as member
     toolBar = addToolBar("Main Toolbar");
+    toolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
 }
 
 void MainWindow::setupActions() {
@@ -476,6 +477,28 @@ void MainWindow::setupActions() {
     pasteAction->setIcon(QIcon(":/icons/paste.ico"));
     findAction->setIcon(QIcon(":/icons/find.ico"));
     replaceAction->setIcon(QIcon(":/icons/replace.ico"));
+    
+    // Assign icons to unimplemented actions
+    closeAction->setIcon(QIcon(":/icons/close.ico"));
+    closeAllAction->setIcon(QIcon(":/icons/closeall.ico"));
+    saveAllAction->setIcon(QIcon(":/icons/saveall.ico"));
+    printAction->setIcon(QIcon(":/icons/print.ico"));
+    zoomInAction->setIcon(QIcon(":/icons/zoomin.ico"));
+    zoomOutAction->setIcon(QIcon(":/icons/zoomout.ico"));
+    wordWrapAction->setIcon(QIcon(":/icons/wrap.ico"));
+    showAllCharactersAction->setIcon(QIcon(":/icons/allchars.ico"));
+    indentGuideAction->setIcon(QIcon(":/icons/indentguide.ico"));
+    functionListAction->setIcon(QIcon(":/icons/funclist.ico"));
+    documentMapAction->setIcon(QIcon(":/icons/docmap.ico"));
+    fileBrowserAction->setIcon(QIcon(":/icons/filebrowser.ico"));
+    documentListAction->setIcon(QIcon(":/icons/doclist.ico"));
+    startMacroRecordingAction->setIcon(QIcon(":/icons/record.ico"));
+    stopMacroRecordingAction->setIcon(QIcon(":/icons/stoprecord.ico"));
+    playMacroAction->setIcon(QIcon(":/icons/playrecord.ico"));
+    runMacroMultipleTimesAction->setIcon(QIcon(":/icons/playrecordmulti.ico"));
+    saveMacroAction->setIcon(QIcon(":/icons/saverecord.ico"));
+    syncVerticalAction->setIcon(QIcon(":/icons/syncv.ico"));
+    syncHorizontalAction->setIcon(QIcon(":/icons/synch.ico"));
 }
 
 void MainWindow::newFile() {
