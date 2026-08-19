@@ -37,6 +37,7 @@ public:
     void setDirty(bool dirty) { isModified = dirty; updateTitle(); }
     void setFilePath(const QString& path) { currentFilePath = path; updateTitle(); }
     int getTabNumber() const { return tabNumber; }
+    void setSessionManager(SessionManager* sessionManager) { m_sessionManager = sessionManager; }
 
 private:
     void setupUI() {
@@ -797,8 +798,8 @@ void MainWindow::createNewTab(const QString& filePath) {
         // Add to session manager
         if (m_sessionManager) {
             m_sessionManager->addUntitledDocument("", nextUntitledNumber - 1);
-            // Set the session manager pointer in the tab
-            newTab->m_sessionManager = m_sessionManager;
+            // Set the session manager pointer in the tab using the setter
+            newTab->setSessionManager(m_sessionManager);
         }
     } else {
         // Check if file is already open
