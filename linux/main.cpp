@@ -9,15 +9,67 @@
 #include <QFile>
 #include <QTextStream>
 #include <QFileInfo>
+#include <QTabWidget>
+#include <QCloseEvent>
 #include "ScintillaEditBase.h"
+
+class DocumentTab : public QWidget {
+    Q_OBJECT
+
+public:
+    DocumentTab(const QString& filePath = "", QWidget* parent = nullptr) 
+        : QWidget(parent), currentFilePath(filePath), isModified(false) {
+        setupUI();
+        setupActions();
+        updateTitle();
+    }
+
+    ScintillaEditBase* getEditor() { return editor; }
+    QString getFilePath() const { return currentFilePath; }
+    bool isDirty() const { return isModified; }
+    void setDirty(bool dirty) { isModified = dirty; updateTitle(); }
+    void setFilePath(const QString& path) { currentFilePath = path; updateTitle(); }
+
+private:
+    void setupUI() {
+        editor = new ScintillaEditBase(this);
+        
+        // Set up layout
+        QVBoxLayout* layout = new QVBoxLayout(this);
+        layout->addWidget(editor);
+        layout->setContentsMargins(0, 0, 0, 0);
+        setLayout(layout);
+    }
+
+    void setupActions() {
+        // Connect editor signals to track modifications
+        connect(editor, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
+            isModified = dirty;
+            updateTitle();
+        });
+    }
+
+    void updateTitle() {
+        emit titleChanged();
+    }
+
+signals:
+    void titleChanged();
+
+private:
+    ScintillaEditBase* editor;
+    QString currentFilePath;
+    bool isModified;
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr) : QMainWindow(parent), currentFilePath("") {
+    MainWindow(QWidget *parent = nullptr) : QMainWindow(parent) {
         setupUI();
         setupActions();
+        createNewTab(); // Ensure at least one tab exists
     }
 
 private slots:
@@ -36,15 +88,25 @@ private slots:
     void paste();
     void selectAll();
 
+    // Tab management
+    void tabChanged(int index);
+    void tabCloseRequested(int index);
+    void documentTitleChanged();
+
 private:
     void setupUI();
     void setupActions();
     void updateWindowTitle();
     bool loadFile(const QString &filePath);
     bool saveFileToPath(const QString &filePath);
+    void createNewTab(const QString& filePath = "");
+    int findTabIndexForFilePath(const QString& filePath);
+    bool closeTab(int index);
+    bool closeAllTabs();
+    DocumentTab* getCurrentTab() const;
+    void updateEditActionsEnabled();
 
-    ScintillaEditBase* editor;
-    QString currentFilePath;
+    QTabWidget* tabWidget;
     QToolBar* toolBar;
 
     // Menu objects
@@ -79,8 +141,8 @@ private:
 };
 
 void MainWindow::setupUI() {
-    editor = new ScintillaEditBase(this);
-    setCentralWidget(editor);
+    tabWidget = new QTabWidget(this);
+    setCentralWidget(tabWidget);
     
     // Set window title
     setWindowTitle("Notepad++");
@@ -162,6 +224,10 @@ void MainWindow::setupActions() {
     connect(pasteAction, &QAction::triggered, this, &MainWindow::paste);
     connect(selectAllAction, &QAction::triggered, this, &MainWindow::selectAll);
 
+    // Connect tab signals
+    connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
+    connect(tabWidget, &QTabWidget::tabCloseRequested, this, &MainWindow::tabCloseRequested);
+
     // Add actions to menus
     fileMenu->addAction(newAction);
     fileMenu->addAction(openAction);
@@ -205,62 +271,212 @@ void MainWindow::setupActions() {
 }
 
 void MainWindow::newFile() {
-    editor->send(SCI_CLEARALL);
-    currentFilePath = "";
-    updateWindowTitle();
+    createNewTab();
 }
 
 void MainWindow::openFile() {
     QString fileName = QFileDialog::getOpenFileName(this, "Open File", "", "All Files (*)");
     if (!fileName.isEmpty()) {
-        loadFile(fileName);
+        // Check if file is already open
+        int existingIndex = findTabIndexForFilePath(fileName);
+        if (existingIndex != -1) {
+            tabWidget->setCurrentIndex(existingIndex);
+            return;
+        }
+        
+        createNewTab(fileName);
     }
 }
 
 void MainWindow::saveFile() {
-    if (currentFilePath.isEmpty()) {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    if (currentTab->getFilePath().isEmpty()) {
         saveAsFile();
     } else {
-        saveFileToPath(currentFilePath);
+        saveFileToPath(currentTab->getFilePath());
     }
 }
 
 void MainWindow::saveAsFile() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
     QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "All Files (*)");
     if (!fileName.isEmpty()) {
         if (saveFileToPath(fileName)) {
-            currentFilePath = fileName;
-            updateWindowTitle();
+            currentTab->setFilePath(fileName);
+            currentTab->setDirty(false);
         }
     }
 }
 
 void MainWindow::exitApp() {
-    close();
+    if (closeAllTabs()) {
+        close();
+    }
 }
 
 void MainWindow::undo() {
-    editor->send(SCI_UNDO);
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_UNDO);
+    }
 }
 
 void MainWindow::redo() {
-    editor->send(SCI_REDO);
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_REDO);
+    }
 }
 
 void MainWindow::cut() {
-    editor->send(SCI_CUT);
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_CUT);
+    }
 }
 
 void MainWindow::copy() {
-    editor->send(SCI_COPY);
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_COPY);
+    }
 }
 
 void MainWindow::paste() {
-    editor->send(SCI_PASTE);
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_PASTE);
+    }
 }
 
 void MainWindow::selectAll() {
-    editor->send(SCI_SELECTALL);
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_SELECTALL);
+    }
+}
+
+void MainWindow::tabChanged(int index) {
+    updateEditActionsEnabled();
+}
+
+void MainWindow::tabCloseRequested(int index) {
+    closeTab(index);
+}
+
+void MainWindow::documentTitleChanged() {
+    DocumentTab* tab = qobject_cast<DocumentTab*>(sender());
+    if (tab) {
+        int index = tabWidget->indexOf(tab);
+        if (index != -1) {
+            QString title = tab->getFilePath().isEmpty() ? "new" : QFileInfo(tab->getFilePath()).fileName();
+            if (tab->isDirty()) {
+                title += "*";
+            }
+            tabWidget->setTabText(index, title);
+        }
+    }
+}
+
+void MainWindow::createNewTab(const QString& filePath) {
+    DocumentTab* newTab = new DocumentTab(filePath, this);
+    
+    // Connect the tab's titleChanged signal to update the tab text
+    connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
+    
+    QString title = filePath.isEmpty() ? "new" : QFileInfo(filePath).fileName();
+    if (!filePath.isEmpty()) {
+        // Check if file is already open
+        int existingIndex = findTabIndexForFilePath(filePath);
+        if (existingIndex != -1) {
+            tabWidget->setCurrentIndex(existingIndex);
+            return;
+        }
+    }
+    
+    int index = tabWidget->addTab(newTab, title);
+    tabWidget->setCurrentIndex(index);
+    
+    // Update tab text to include asterisk if needed
+    documentTitleChanged();
+}
+
+int MainWindow::findTabIndexForFilePath(const QString& filePath) {
+    for (int i = 0; i < tabWidget->count(); ++i) {
+        DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
+        if (tab && tab->getFilePath() == filePath) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool MainWindow::closeTab(int index) {
+    DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(index));
+    if (!tab) return false;
+    
+    // If the tab is modified, ask user
+    if (tab->isDirty()) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle("Save Changes");
+        msgBox.setText("The document has been modified.");
+        msgBox.setInformativeText("Do you want to save your changes?");
+        msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+        msgBox.setDefaultButton(QMessageBox::Save);
+        
+        int ret = msgBox.exec();
+        switch (ret) {
+            case QMessageBox::Save:
+                if (!saveFileToPath(tab->getFilePath())) {
+                    return false; // Save failed, cancel closing
+                }
+                break;
+            case QMessageBox::Discard:
+                break; // Just close
+            case QMessageBox::Cancel:
+                return false; // Cancel closing
+        }
+    }
+    
+    tabWidget->removeTab(index);
+    
+    // Ensure at least one tab remains
+    if (tabWidget->count() == 0) {
+        createNewTab();
+    }
+    
+    return true;
+}
+
+bool MainWindow::closeAllTabs() {
+    // Check all tabs for unsaved changes
+    for (int i = tabWidget->count() - 1; i >= 0; --i) {
+        if (!closeTab(i)) {
+            return false; // Cancelled by user
+        }
+    }
+    return true;
+}
+
+DocumentTab* MainWindow::getCurrentTab() const {
+    QWidget* currentWidget = tabWidget->currentWidget();
+    return qobject_cast<DocumentTab*>(currentWidget);
+}
+
+void MainWindow::updateEditActionsEnabled() {
+    DocumentTab* currentTab = getCurrentTab();
+    bool hasEditor = (currentTab != nullptr);
+    
+    undoAction->setEnabled(hasEditor && currentTab->getEditor()->send(SCI_CANUNDO));
+    redoAction->setEnabled(hasEditor && currentTab->getEditor()->send(SCI_CANREDO));
+    cutAction->setEnabled(hasEditor);
+    copyAction->setEnabled(hasEditor);
+    pasteAction->setEnabled(hasEditor);
+    selectAllAction->setEnabled(hasEditor);
 }
 
 bool MainWindow::loadFile(const QString &filePath) {
@@ -274,15 +490,21 @@ bool MainWindow::loadFile(const QString &filePath) {
     QString content = in.readAll();
     file.close();
 
-    editor->send(SCI_CLEARALL);
-    editor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.toStdString().c_str()));
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        currentTab->getEditor()->send(SCI_CLEARALL);
+        currentTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.toStdString().c_str()));
+        currentTab->setFilePath(filePath);
+        currentTab->setDirty(false);
+    }
     
-    currentFilePath = filePath;
-    updateWindowTitle();
     return true;
 }
 
 bool MainWindow::saveFileToPath(const QString &filePath) {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return false;
+
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly)) {
         QMessageBox::warning(this, "Error", "Could not open file for writing.");
@@ -290,10 +512,10 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
     }
 
     // Get text from Scintilla editor
-    Scintilla::Position length = editor->send(SCI_GETTEXTLENGTH);
+    Scintilla::Position length = currentTab->getEditor()->send(SCI_GETTEXTLENGTH);
     if (length > 0) {
         char* buffer = new char[length + 1];
-        editor->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
+        currentTab->getEditor()->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
         QString content(buffer);
         delete[] buffer;
         
@@ -310,12 +532,7 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
 }
 
 void MainWindow::updateWindowTitle() {
-    if (currentFilePath.isEmpty()) {
-        setWindowTitle("Notepad++");
-    } else {
-        QFileInfo fileInfo(currentFilePath);
-        setWindowTitle(fileInfo.fileName() + " - Notepad++");
-    }
+    setWindowTitle("Notepad++");
 }
 
 int main(int argc, char *argv[])
