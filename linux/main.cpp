@@ -16,9 +16,9 @@
 #include <QWidget>
 #include <QLayout>
 #include <QKeySequence>
-#include <QIcon>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
+#include "sessionmanager.h"
 
 class DocumentTab : public QWidget {
     Q_OBJECT
@@ -55,10 +55,17 @@ private:
             isModified = dirty;
             updateTitle();
         });
+        
+        // Connect text change signals for session management
+        connect(editor, &ScintillaEditBase::textChanged, this, &DocumentTab::onTextChanged);
     }
 
     void updateTitle() {
         emit titleChanged();
+    }
+    
+    void onTextChanged() {
+        // This will be handled by the MainWindow's session manager
     }
 
 signals:
@@ -78,6 +85,8 @@ public:
     MainWindow(QWidget *parent = nullptr) : QMainWindow(parent), nextUntitledNumber(1) {
         setupUI();
         setupActions();
+        // Load session on startup
+        loadSession();
         createNewTab(); // Ensure at least one tab exists
         findReplaceDialog = new FindReplaceDialog(this);
         connect(findReplaceDialog, &FindReplaceDialog::findNext, this, &MainWindow::findNext);
@@ -123,6 +132,10 @@ private:
     bool closeAllTabs();
     DocumentTab* getCurrentTab() const;
     void updateEditActionsEnabled();
+    
+    // Session management
+    void saveSession();
+    void loadSession();
     
     // Find/Replace functions
     void findNext();
@@ -196,6 +209,9 @@ private:
     
     // Find/Replace dialog
     FindReplaceDialog *findReplaceDialog;
+    
+    // Session manager
+    SessionManager* m_sessionManager;
 };
 
 void MainWindow::setupUI() {
@@ -539,11 +555,19 @@ void MainWindow::saveAsFile() {
         if (saveFileToPath(fileName)) {
             currentTab->setFilePath(fileName);
             currentTab->setDirty(false);
+            
+            // Remove from session manager since it's now a normal file
+            if (m_sessionManager) {
+                m_sessionManager->removeUntitledDocument(currentTab->getTabNumber());
+            }
         }
     }
 }
 
 void MainWindow::exitApp() {
+    // Save session before closing
+    saveSession();
+    
     if (closeAllTabs()) {
         close();
     }
@@ -621,6 +645,42 @@ void MainWindow::tabChanged(int index) {
 }
 
 void MainWindow::tabCloseRequested(int index) {
+    DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(index));
+    if (tab) {
+        // If it's an untitled document and modified, ask user
+        if (tab->getFilePath().isEmpty() && tab->isDirty()) {
+            QMessageBox msgBox(this);
+            msgBox.setWindowTitle("Close Tab");
+            msgBox.setText("The document has been modified.");
+            msgBox.setInformativeText("Do you want to save your changes?");
+            msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+            msgBox.setDefaultButton(QMessageBox::Save);
+            
+            int ret = msgBox.exec();
+            switch (ret) {
+                case QMessageBox::Save:
+                    // Save and close
+                    if (!saveFileToPath(tab->getFilePath())) {
+                        return; // Cancel closing if save failed
+                    }
+                    break;
+                case QMessageBox::Discard:
+                    // Just close, remove from session manager
+                    if (m_sessionManager) {
+                        m_sessionManager->removeUntitledDocument(tab->getTabNumber());
+                    }
+                    break;
+                case QMessageBox::Cancel:
+                    return; // Cancel closing
+            }
+        } else if (tab->getFilePath().isEmpty()) {
+            // Untitled document, just remove from session manager
+            if (m_sessionManager) {
+                m_sessionManager->removeUntitledDocument(tab->getTabNumber());
+            }
+        }
+    }
+    
     closeTab(index);
 }
 
@@ -714,6 +774,11 @@ void MainWindow::createNewTab(const QString& filePath) {
         // For new untitled documents, use sequential naming
         title = QString("new %1").arg(nextUntitledNumber);
         nextUntitledNumber++;
+        
+        // Add to session manager
+        if (m_sessionManager) {
+            m_sessionManager->addUntitledDocument("", nextUntitledNumber - 1);
+        }
     } else {
         // Check if file is already open
         int existingIndex = findTabIndexForFilePath(filePath);
@@ -865,6 +930,28 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
 
 void MainWindow::updateWindowTitle() {
     setWindowTitle("Notepad++");
+}
+
+// Session management functions
+void MainWindow::saveSession() {
+    if (m_sessionManager) {
+        m_sessionManager->saveSession();
+    }
+}
+
+void MainWindow::loadSession() {
+    // Create session manager
+    m_sessionManager = new SessionManager(this);
+    
+    // Load existing session on startup
+    m_sessionManager->loadSession();
+    
+    // Restore untitled tabs from session if they exist
+    if (m_sessionManager->hasUntitledDocuments()) {
+        // For now, we'll just create a new tab to ensure at least one exists
+        // In a full implementation, this would restore the actual content from backup files
+        return;
+    }
 }
 
 // Find/Replace functions
