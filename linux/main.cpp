@@ -11,7 +11,7 @@
 #include <QFileInfo>
 #include <QTabWidget>
 #include <QCloseEvent>
-#include <QVBoxLayout>
+#include <QStatusBar>
 #include "ScintillaEditBase.h"
 
 class DocumentTab : public QWidget {
@@ -95,6 +95,7 @@ private slots:
     void tabChanged(int index);
     void tabCloseRequested(int index);
     void documentTitleChanged();
+    void updateStatusBar();
 
 private:
     void setupUI();
@@ -111,6 +112,7 @@ private:
 
     QTabWidget* tabWidget;
     QToolBar* toolBar;
+    QStatusBar* statusBar;
 
     // Menu objects
     QMenu *fileMenu;
@@ -154,6 +156,10 @@ void MainWindow::setupUI() {
     
     // Set window title
     setWindowTitle("Notepad++");
+    
+    // Create status bar
+    statusBar = new QStatusBar(this);
+    setStatusBar(statusBar);
     
     // Create menu bar
     QMenuBar* menuBar = this->menuBar();
@@ -370,6 +376,7 @@ void MainWindow::selectAll() {
 
 void MainWindow::tabChanged(int index) {
     updateEditActionsEnabled();
+    updateStatusBar();
 }
 
 void MainWindow::tabCloseRequested(int index) {
@@ -395,6 +402,61 @@ void MainWindow::documentTitleChanged() {
             tabWidget->setTabText(index, title);
         }
     }
+    updateStatusBar();
+}
+
+void MainWindow::updateStatusBar() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) {
+        statusBar->clearMessage();
+        return;
+    }
+
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Get caret position
+    int line = editor->send(SCI_LINEFROMPOSITION, editor->send(SCI_GETCURRENTPOS));
+    int col = editor->send(SCI_GETCOLUMN, editor->send(SCI_GETCURRENTPOS));
+    
+    // Get selection length
+    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    int selLength = abs(static_cast<int>(currentPos - anchor));
+    
+    // Get total line count
+    int lineCount = editor->send(SCI_GETLINECOUNT);
+    
+    // Get EOL mode
+    int eolMode = editor->send(SCI_GETEOLMODE);
+    QString eolStr;
+    switch (eolMode) {
+        case 0: // SC_EOL_CRLF
+            eolStr = "Windows (CR LF)";
+            break;
+        case 1: // SC_EOL_LF
+            eolStr = "Unix (LF)";
+            break;
+        case 2: // SC_EOL_CR
+            eolStr = "Macintosh (CR)";
+            break;
+        default:
+            eolStr = "Unknown";
+    }
+    
+    // Get insert/overwrite mode
+    bool overwrite = editor->send(SCI_GETOVERTYPE);
+    QString modeStr = overwrite ? "OVR" : "INS";
+    
+    // Format status bar text
+    QString statusText = QString("Ln %1, Col %2    Sel %3    Lines %4    %5    UTF-8    %6")
+                         .arg(line + 1)
+                         .arg(col + 1)
+                         .arg(selLength)
+                         .arg(lineCount)
+                         .arg(eolStr)
+                         .arg(modeStr);
+    
+    statusBar->showMessage(statusText);
 }
 
 void MainWindow::createNewTab(const QString& filePath) {
@@ -402,6 +464,9 @@ void MainWindow::createNewTab(const QString& filePath) {
     
     // Connect the tab's titleChanged signal to update the tab text
     connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
+    
+    // Connect editor signals for status bar updates
+    connect(newTab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
     
     QString title;
     if (filePath.isEmpty()) {
@@ -423,6 +488,9 @@ void MainWindow::createNewTab(const QString& filePath) {
     
     // Update tab text to include asterisk if needed
     documentTitleChanged();
+    
+    // Update status bar for new tab
+    updateStatusBar();
 }
 
 int MainWindow::findTabIndexForFilePath(const QString& filePath) {
@@ -517,6 +585,9 @@ bool MainWindow::loadFile(const QString &filePath) {
         currentTab->setFilePath(filePath);
         currentTab->setDirty(false);
     }
+    
+    // Update status bar after loading file
+    updateStatusBar();
     
     return true;
 }
