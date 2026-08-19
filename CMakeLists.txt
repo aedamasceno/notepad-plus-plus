@@ -12,12 +12,14 @@ set(CMAKE_AUTOUIC ON)
 # Gather all Scintilla core sources (C and C++)
 file(GLOB_RECURSE SCINTILLA_CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/src/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/src/*.cxx"
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/src/*.cpp"
 )
 
 # Gather the Qt wrapper sources for the widget base
 file(GLOB_RECURSE QT_EDIT_BASE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase/*.cxx"
 )
 file(GLOB_RECURSE QT_EDIT_BASE_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase/*.h"
@@ -48,7 +50,7 @@ target_include_directories(npp_linux PRIVATE
 )
 
 # Define the macro that enables Qt specific code in Scintilla
-target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT)
+target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1)
 
 target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
 
