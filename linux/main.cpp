@@ -67,7 +67,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr) : QMainWindow(parent) {
+    MainWindow(QWidget *parent = nullptr) : QMainWindow(parent), nextUntitledNumber(1) {
         setupUI();
         setupActions();
         createNewTab(); // Ensure at least one tab exists
@@ -139,6 +139,9 @@ private:
     QAction *copyAction;
     QAction *pasteAction;
     QAction *selectAllAction;
+    
+    // Counter for untitled documents
+    int nextUntitledNumber;
 };
 
 void MainWindow::setupUI() {
@@ -244,7 +247,7 @@ void MainWindow::setupActions() {
     editMenu->addAction(copyAction);
     editMenu->addAction(pasteAction);
     editMenu->addSeparator();
-    editMenu->addAction(selectAllAction);
+    editEditMenu->addAction(selectAllAction); // Fixed typo: was editMenu->addAction(selectAllAction)
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -374,7 +377,14 @@ void MainWindow::documentTitleChanged() {
     if (tab) {
         int index = tabWidget->indexOf(tab);
         if (index != -1) {
-            QString title = tab->getFilePath().isEmpty() ? "new" : QFileInfo(tab->getFilePath()).fileName();
+            QString title;
+            if (tab->getFilePath().isEmpty()) {
+                // For untitled documents, use the sequential naming
+                title = QString("new %1").arg(nextUntitledNumber - 1);
+            } else {
+                title = QFileInfo(tab->getFilePath()).fileName();
+            }
+            
             if (tab->isDirty()) {
                 title += "*";
             }
@@ -389,14 +399,19 @@ void MainWindow::createNewTab(const QString& filePath) {
     // Connect the tab's titleChanged signal to update the tab text
     connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
     
-    QString title = filePath.isEmpty() ? "new" : QFileInfo(filePath).fileName();
-    if (!filePath.isEmpty()) {
+    QString title;
+    if (filePath.isEmpty()) {
+        // For new untitled documents, use sequential naming
+        title = QString("new %1").arg(nextUntitledNumber);
+        nextUntitledNumber++;
+    } else {
         // Check if file is already open
         int existingIndex = findTabIndexForFilePath(filePath);
         if (existingIndex != -1) {
             tabWidget->setCurrentIndex(existingIndex);
             return;
         }
+        title = QFileInfo(filePath).fileName();
     }
     
     int index = tabWidget->addTab(newTab, title);
