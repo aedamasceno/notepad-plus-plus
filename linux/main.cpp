@@ -16,6 +16,7 @@
 #include <QWidget>
 #include <QLayout>
 #include <QKeySequence>
+#include <QIcon>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
 
@@ -463,6 +464,18 @@ void MainWindow::setupActions() {
     saveMacroAction->setEnabled(false);
     syncVerticalAction->setEnabled(false);
     syncHorizontalAction->setEnabled(false);
+
+    // Assign icons to actions
+    newAction->setIcon(QIcon(":/icons/new.ico"));
+    openAction->setIcon(QIcon(":/icons/open.ico"));
+    saveAction->setIcon(QIcon(":/icons/save.ico"));
+    undoAction->setIcon(QIcon(":/icons/undo.ico"));
+    redoAction->setIcon(QIcon(":/icons/redo.ico"));
+    cutAction->setIcon(QIcon(":/icons/cut.ico"));
+    copyAction->setIcon(QIcon(":/icons/copy.ico"));
+    pasteAction->setIcon(QIcon(":/icons/paste.ico"));
+    findAction->setIcon(QIcon(":/icons/find.ico"));
+    replaceAction->setIcon(QIcon(":/icons/replace.ico"));
 }
 
 void MainWindow::newFile() {
