@@ -12,9 +12,12 @@
 #include <QTabWidget>
 #include <QCloseEvent>
 #include <QStatusBar>
-#include <QLabel>
 #include <QVBoxLayout>
+#include <QWidget>
+#include <QLayout>
+#include <QKeySequence>
 #include "ScintillaEditBase.h"
+#include "findreplace.h"
 
 class DocumentTab : public QWidget {
     Q_OBJECT
@@ -39,7 +42,7 @@ private:
         editor = new ScintillaEditBase(this);
         
         // Set up layout
-        QVBoxLayout* layout = new QVBoxLayout(this);
+        QVBoxLayout* layout = new QVBoxLayout();
         layout->addWidget(editor);
         layout->setContentsMargins(0, 0, 0, 0);
         setLayout(layout);
@@ -51,11 +54,6 @@ private:
             isModified = dirty;
             updateTitle();
         });
-        
-        // Connect caret and selection signals for status bar updates
-        connect(editor, &ScintillaEditBase::notifyChange, this, [this]() {
-            emit editorStateChanged();
-        });
     }
 
     void updateTitle() {
@@ -64,7 +62,6 @@ private:
 
 signals:
     void titleChanged();
-    void editorStateChanged();
 
 private:
     ScintillaEditBase* editor;
@@ -81,6 +78,12 @@ public:
         setupUI();
         setupActions();
         createNewTab(); // Ensure at least one tab exists
+        findReplaceDialog = new FindReplaceDialog(this);
+        connect(findReplaceDialog, &FindReplaceDialog::findNext, this, &MainWindow::findNext);
+        connect(findReplaceDialog, &FindReplaceDialog::findPrevious, this, &MainWindow::findPrevious);
+        connect(findReplaceDialog, &FindReplaceDialog::replace, this, &MainWindow::replace);
+        connect(findReplaceDialog, &FindReplaceDialog::replaceAll, this, &MainWindow::replaceAll);
+        connect(findReplaceDialog, &FindReplaceDialog::closed, this, &MainWindow::findReplaceClosed);
     }
 
 private slots:
@@ -98,12 +101,13 @@ private slots:
     void copy();
     void paste();
     void selectAll();
+    void find();
 
     // Tab management
     void tabChanged(int index);
     void tabCloseRequested(int index);
     void documentTitleChanged();
-    void editorStateChanged();
+    void updateStatusBar();
 
 private:
     void setupUI();
@@ -117,9 +121,13 @@ private:
     bool closeAllTabs();
     DocumentTab* getCurrentTab() const;
     void updateEditActionsEnabled();
-    void updateStatusBar();
-    QString getEolModeString(int eolMode);
-    QString getEncodingString();
+    
+    // Find/Replace functions
+    void findNext();
+    void findPrevious();
+    void replace();
+    void replaceAll();
+    void findReplaceClosed();
 
     QTabWidget* tabWidget;
     QToolBar* toolBar;
@@ -155,8 +163,14 @@ private:
     QAction *pasteAction;
     QAction *selectAllAction;
     
+    // Search menu actions
+    QAction *findAction;
+    
     // Counter for untitled documents
     int nextUntitledNumber;
+    
+    // Find/Replace dialog
+    FindReplaceDialog *findReplaceDialog;
 };
 
 void MainWindow::setupUI() {
@@ -165,12 +179,12 @@ void MainWindow::setupUI() {
     tabWidget->setTabsClosable(true);
     setCentralWidget(tabWidget);
     
+    // Set window title
+    setWindowTitle("Notepad++");
+    
     // Create status bar
     statusBar = new QStatusBar(this);
     setStatusBar(statusBar);
-    
-    // Set window title
-    setWindowTitle("Notepad++");
     
     // Create menu bar
     QMenuBar* menuBar = this->menuBar();
@@ -234,6 +248,9 @@ void MainWindow::setupActions() {
     pasteAction = new QAction("&Paste", this);
     selectAllAction = new QAction("Select &All", this);
 
+    // Search actions
+    findAction = new QAction("&Find", this);
+
     // Connect file actions
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
@@ -248,6 +265,9 @@ void MainWindow::setupActions() {
     connect(copyAction, &QAction::triggered, this, &MainWindow::copy);
     connect(pasteAction, &QAction::triggered, this, &MainWindow::paste);
     connect(selectAllAction, &QAction::triggered, this, &MainWindow::selectAll);
+
+    // Connect search actions
+    connect(findAction, &QAction::triggered, this, &MainWindow::find);
 
     // Connect tab signals
     connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
@@ -268,7 +288,9 @@ void MainWindow::setupActions() {
     editMenu->addAction(copyAction);
     editMenu->addAction(pasteAction);
     editMenu->addSeparator();
-    editMenu->addAction(selectAllAction); // Fixed typo: was editEditMenu->addAction(selectAllAction)
+    editMenu->addAction(selectAllAction);
+
+    searchMenu->addAction(findAction);
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -281,6 +303,8 @@ void MainWindow::setupActions() {
     toolBar->addAction(cutAction);
     toolBar->addAction(copyAction);
     toolBar->addAction(pasteAction);
+    toolBar->addSeparator();
+    toolBar->addAction(findAction);
 
     // Set shortcuts
     newAction->setShortcut(QKeySequence::New);
@@ -293,6 +317,7 @@ void MainWindow::setupActions() {
     copyAction->setShortcut(QKeySequence::Copy);
     pasteAction->setShortcut(QKeySequence::Paste);
     selectAllAction->setShortcut(QKeySequence::SelectAll);
+    findAction->setShortcut(QKeySequence::Find);
 }
 
 void MainWindow::newFile() {
@@ -385,6 +410,18 @@ void MainWindow::selectAll() {
     }
 }
 
+void MainWindow::find() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    // Show find dialog
+    findReplaceDialog->showFind();
+    findReplaceDialog->setFindText("");
+    findReplaceDialog->show();
+    findReplaceDialog->raise();
+    findReplaceDialog->activateWindow();
+}
+
 void MainWindow::tabChanged(int index) {
     updateEditActionsEnabled();
     updateStatusBar();
@@ -413,10 +450,61 @@ void MainWindow::documentTitleChanged() {
             tabWidget->setTabText(index, title);
         }
     }
+    updateStatusBar();
 }
 
-void MainWindow::editorStateChanged() {
-    updateStatusBar();
+void MainWindow::updateStatusBar() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) {
+        statusBar->clearMessage();
+        return;
+    }
+
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Get caret position
+    int line = editor->send(SCI_LINEFROMPOSITION, editor->send(SCI_GETCURRENTPOS));
+    int col = editor->send(SCI_GETCOLUMN, editor->send(SCI_GETCURRENTPOS));
+    
+    // Get selection length
+    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    int selLength = abs(static_cast<int>(currentPos - anchor));
+    
+    // Get total line count
+    int lineCount = editor->send(SCI_GETLINECOUNT);
+    
+    // Get EOL mode
+    int eolMode = editor->send(SCI_GETEOLMODE);
+    QString eolStr;
+    switch (eolMode) {
+        case 0: // SC_EOL_CRLF
+            eolStr = "Windows (CR LF)";
+            break;
+        case 1: // SC_EOL_LF
+            eolStr = "Unix (LF)";
+            break;
+        case 2: // SC_EOL_CR
+            eolStr = "Macintosh (CR)";
+            break;
+        default:
+            eolStr = "Unknown";
+    }
+    
+    // Get insert/overwrite mode
+    bool overwrite = editor->send(SCI_GETOVERTYPE);
+    QString modeStr = overwrite ? "OVR" : "INS";
+    
+    // Format status bar text
+    QString statusText = QString("Ln %1, Col %2    Sel %3    Lines %4    %5    UTF-8    %6")
+                         .arg(line + 1)
+                         .arg(col + 1)
+                         .arg(selLength)
+                         .arg(lineCount)
+                         .arg(eolStr)
+                         .arg(modeStr);
+    
+    statusBar->showMessage(statusText);
 }
 
 void MainWindow::createNewTab(const QString& filePath) {
@@ -425,8 +513,8 @@ void MainWindow::createNewTab(const QString& filePath) {
     // Connect the tab's titleChanged signal to update the tab text
     connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
     
-    // Connect editor state changed signal
-    connect(newTab, &DocumentTab::editorStateChanged, this, &MainWindow::editorStateChanged);
+    // Connect editor signals for status bar updates
+    connect(newTab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
     
     QString title;
     if (filePath.isEmpty()) {
@@ -544,10 +632,10 @@ bool MainWindow::loadFile(const QString &filePath) {
         currentTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.toStdString().c_str()));
         currentTab->setFilePath(filePath);
         currentTab->setDirty(false);
-        
-        // Update status bar after loading file
-        updateStatusBar();
     }
+    
+    // Update status bar after loading file
+    updateStatusBar();
     
     return true;
 }
@@ -582,72 +670,217 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
     return true;
 }
 
-void MainWindow::updateStatusBar() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) {
-        statusBar->clearMessage();
-        return;
-    }
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-    
-    // Get caret position
-    Scintilla::Position caretPos = editor->send(SCI_GETCURRENTPOS);
-    Scintilla::Position line = editor->send(SCI_LINEFROMPOSITION, caretPos);
-    Scintilla::Position col = editor->send(SCI_GETCOLUMN, caretPos);
-    
-    // Get selection info
-    Scintilla::Position selStart = editor->send(SCI_GETSELECTIONSTART);
-    Scintilla::Position selEnd = editor->send(SCI_GETSELECTIONEND);
-    Scintilla::Position selLength = selEnd - selStart;
-    
-    // Get line count
-    Scintilla::Position lineCount = editor->send(SCI_GETLINECOUNT);
-    
-    // Get EOL mode
-    int eolMode = editor->send(SCI_GETEOLMODE);
-    QString eolStr = getEolModeString(eolMode);
-    
-    // Get encoding (always UTF-8 for new documents)
-    QString encodingStr = getEncodingString();
-    
-    // Get insert/overwrite mode
-    bool overwrite = editor->send(SCI_GETOVERTYPE);
-    QString modeStr = overwrite ? "OVR" : "INS";
-    
-    // Format status bar text
-    QString statusText = QString("Ln %1, Col %2    Sel %3    Lines %4    %5    %6    %7")
-                         .arg(line + 1)
-                         .arg(col + 1)
-                         .arg(selLength)
-                         .arg(lineCount)
-                         .arg(eolStr)
-                         .arg(encodingStr)
-                         .arg(modeStr);
-    
-    statusBar->showMessage(statusText);
-}
-
-QString MainWindow::getEolModeString(int eolMode) {
-    switch (eolMode) {
-        case SC_EOL_CRLF:
-            return "Windows (CR LF)";
-        case SC_EOL_CR:
-            return "Macintosh (CR)";
-        case SC_EOL_LF:
-            return "Unix (LF)";
-        default:
-            return "Unknown";
-    }
-}
-
-QString MainWindow::getEncodingString() {
-    // For now, treat all new documents as UTF-8
-    return "UTF-8";
-}
-
 void MainWindow::updateWindowTitle() {
     setWindowTitle("Notepad++");
+}
+
+// Find/Replace functions
+void MainWindow::findNext() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Set target range to search from current position to end of document
+    editor->send(SCI_SETTARGETSTART, currentPos);
+    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+    
+    // Perform search
+    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
+        static_cast<Scintilla::Position>(findText.length()), 
+        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+    
+    if (foundPos != -1) {
+        // Select the match
+        Scintilla::Position endPos = foundPos + findText.length();
+        editor->send(SCI_SETSEL, foundPos, endPos);
+        editor->send(SCI_SCROLLCARET);
+    } else {
+        // Wrap around if enabled
+        if (findReplaceDialog->wrapAround()) {
+            editor->send(SCI_SETTARGETSTART, 0);
+            editor->send(SCI_SETTARGETEND, currentPos);
+            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+            
+            foundPos = editor->send(SCI_SEARCHINTARGET, 
+                static_cast<Scintilla::Position>(findText.length()), 
+                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+                
+            if (foundPos != -1) {
+                Scintilla::Position endPos = foundPos + findText.length();
+                editor->send(SCI_SETSEL, foundPos, endPos);
+                editor->send(SCI_SCROLLCARET);
+            }
+        }
+    }
+}
+
+void MainWindow::findPrevious() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Set target range to search from beginning to current position
+    editor->send(SCI_SETTARGETSTART, 0);
+    editor->send(SCI_SETTARGETEND, currentPos);
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+    
+    // Perform search backwards
+    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
+        static_cast<Scintilla::Position>(findText.length()), 
+        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+    
+    if (foundPos != -1) {
+        // Select the match
+        Scintilla::Position endPos = foundPos + findText.length();
+        editor->send(SCI_SETSEL, foundPos, endPos);
+        editor->send(SCI_SCROLLCARET);
+    } else {
+        // Wrap around if enabled
+        if (findReplaceDialog->wrapAround()) {
+            editor->send(SCI_SETTARGETSTART, currentPos);
+            editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+            
+            foundPos = editor->send(SCI_SEARCHINTARGET, 
+                static_cast<Scintilla::Position>(findText.length()), 
+                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+                
+            if (foundPos != -1) {
+                Scintilla::Position endPos = foundPos + findText.length();
+                editor->send(SCI_SETSEL, foundPos, endPos);
+                editor->send(SCI_SCROLLCARET);
+            }
+        }
+    }
+}
+
+void MainWindow::replace() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    QString replaceText = findReplaceDialog->replaceText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Check if we're at a match
+    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
+    Scintilla::Position selStart = editor->send(SCI_GETSELECTIONSTART);
+    Scintilla::Position selEnd = editor->send(SCI_GETSELECTIONEND);
+    
+    bool isSelectionMatch = (selStart != selEnd) && 
+        (selStart == anchor) &&
+        (selEnd - selStart == static_cast<Scintilla::Position>(findText.length()));
+    
+    if (isSelectionMatch) {
+        // Get the text at current selection
+        char* buffer = new char[findText.length() + 1];
+        editor->send(SCI_GETTEXT, findText.length() + 1, reinterpret_cast<sptr_t>(buffer));
+        QString selectedText(buffer);
+        delete[] buffer;
+        
+        if (selectedText == findText) {
+            // Replace the selection
+            editor->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+            editor->send(SCI_SETSEL, selStart, selStart + replaceText.length());
+            
+            // Continue searching from after replacement
+            findNext();
+        }
+    } else {
+        // Perform search and replace
+        findNext();
+    }
+}
+
+void MainWindow::replaceAll() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    QString replaceText = findReplaceDialog->replaceText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Begin undo action
+    editor->send(SCI_BEGINUNDOACTION);
+    
+    // Set target to entire document
+    editor->send(SCI_SETTARGETSTART, 0);
+    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+    
+    // Replace all occurrences
+    Scintilla::Position replaceCount = editor->send(SCI_REPLACETARGET, 
+        static_cast<Scintilla::Position>(replaceText.length()), 
+        reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+    
+    // End undo action
+    editor->send(SCI_ENDUNDOACTION);
+    
+    if (replaceCount > 0) {
+        QMessageBox::information(this, "Replace All", QString("%1 occurrences replaced").arg(replaceCount));
+    }
+}
+
+void MainWindow::findReplaceClosed() {
+    // Nothing to do here for now
 }
 
 int main(int argc, char *argv[])
