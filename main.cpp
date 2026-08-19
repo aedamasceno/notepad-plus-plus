@@ -168,6 +168,28 @@ private:
     QAction *findAction;
     QAction *replaceAction;
     
+    // Additional toolbar actions
+    QAction *closeAction;
+    QAction *closeAllAction;
+    QAction *saveAllAction;
+    QAction *printAction;
+    QAction *zoomInAction;
+    QAction *zoomOutAction;
+    QAction *wordWrapAction;
+    QAction *showAllCharactersAction;
+    QAction *indentGuideAction;
+    QAction *functionListAction;
+    QAction *documentMapAction;
+    QAction *fileBrowserAction;
+    QAction *documentListAction;
+    QAction *startMacroRecordingAction;
+    QAction *stopMacroRecordingAction;
+    QAction *playMacroAction;
+    QAction *runMacroMultipleTimesAction;
+    QAction *saveMacroAction;
+    QAction *syncVerticalAction;
+    QAction *syncHorizontalAction;
+    
     // Counter for untitled documents
     int nextUntitledNumber;
     
@@ -254,6 +276,28 @@ void MainWindow::setupActions() {
     findAction = new QAction("&Find", this);
     replaceAction = new QAction("&Replace", this);
 
+    // Additional toolbar actions (unimplemented)
+    closeAction = new QAction("Close", this);
+    closeAllAction = new QAction("Close All", this);
+    saveAllAction = new QAction("Save All", this);
+    printAction = new QAction("Print", this);
+    zoomInAction = new QAction("Zoom In", this);
+    zoomOutAction = new QAction("Zoom Out", this);
+    wordWrapAction = new QAction("Word Wrap", this);
+    showAllCharactersAction = new QAction("Show All Characters", this);
+    indentGuideAction = new QAction("Indent Guide", this);
+    functionListAction = new QAction("Function List", this);
+    documentMapAction = new QAction("Document Map", this);
+    fileBrowserAction = new QAction("File Browser", this);
+    documentListAction = new QAction("Document List", this);
+    startMacroRecordingAction = new QAction("Start Macro Recording", this);
+    stopMacroRecordingAction = new QAction("Stop Macro Recording", this);
+    playMacroAction = new QAction("Play Macro", this);
+    runMacroMultipleTimesAction = new QAction("Run Macro Multiple Times", this);
+    saveMacroAction = new QAction("Save Macro", this);
+    syncVerticalAction = new QAction("Sync Vertical", this);
+    syncHorizontalAction = new QAction("Sync Horizontal", this);
+
     // Connect file actions
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
@@ -272,6 +316,28 @@ void MainWindow::setupActions() {
     // Connect search actions
     connect(findAction, &QAction::triggered, this, &MainWindow::find);
     connect(replaceAction, &QAction::triggered, this, &MainWindow::showReplaceDialog);
+
+    // Connect additional toolbar actions (unimplemented)
+    connect(closeAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(closeAllAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(saveAllAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(printAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(zoomInAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(zoomOutAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(wordWrapAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(showAllCharactersAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(indentGuideAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(functionListAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(documentMapAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(fileBrowserAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(documentListAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(startMacroRecordingAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(stopMacroRecordingAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(playMacroAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(runMacroMultipleTimesAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(saveMacroAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(syncVerticalAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(syncHorizontalAction, &QAction::triggered, this, []() { /* Not implemented */ });
 
     // Connect tab signals
     connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
@@ -311,6 +377,34 @@ void MainWindow::setupActions() {
     toolBar->addSeparator();
     toolBar->addAction(findAction);
     toolBar->addAction(replaceAction);
+    toolBar->addSeparator();
+    
+    // Add additional toolbar actions
+    toolBar->addAction(closeAction);
+    toolBar->addAction(closeAllAction);
+    toolBar->addAction(saveAllAction);
+    toolBar->addAction(printAction);
+    toolBar->addSeparator();
+    toolBar->addAction(zoomInAction);
+    toolBar->addAction(zoomOutAction);
+    toolBar->addSeparator();
+    toolBar->addAction(wordWrapAction);
+    toolBar->addAction(showAllCharactersAction);
+    toolBar->addAction(indentGuideAction);
+    toolBar->addSeparator();
+    toolBar->addAction(functionListAction);
+    toolBar->addAction(documentMapAction);
+    toolBar->addAction(fileBrowserAction);
+    toolBar->addAction(documentListAction);
+    toolBar->addSeparator();
+    toolBar->addAction(startMacroRecordingAction);
+    toolBar->addAction(stopMacroRecordingAction);
+    toolBar->addAction(playMacroAction);
+    toolBar->addAction(runMacroMultipleTimesAction);
+    toolBar->addAction(saveMacroAction);
+    toolBar->addSeparator();
+    toolBar->addAction(syncVerticalAction);
+    toolBar->addAction(syncHorizontalAction);
 
     // Set shortcuts
     newAction->setShortcut(QKeySequence::New);
@@ -325,6 +419,50 @@ void MainWindow::setupActions() {
     selectAllAction->setShortcut(QKeySequence::SelectAll);
     findAction->setShortcut(QKeySequence::Find);
     replaceAction->setShortcut(QKeySequence("Ctrl+H"));
+    
+    // Set tooltips for unimplemented actions
+    closeAction->setToolTip("Close");
+    closeAllAction->setToolTip("Close All");
+    saveAllAction->setToolTip("Save All");
+    printAction->setToolTip("Print");
+    zoomInAction->setToolTip("Zoom In");
+    zoomOutAction->setToolTip("Zoom Out");
+    wordWrapAction->setToolTip("Word Wrap");
+    showAllCharactersAction->setToolTip("Show All Characters");
+    indentGuideAction->setToolTip("Indent Guide");
+    functionListAction->setToolTip("Function List");
+    documentMapAction->setToolTip("Document Map");
+    fileBrowserAction->setToolTip("File Browser");
+    documentListAction->setToolTip("Document List");
+    startMacroRecordingAction->setToolTip("Start Macro Recording");
+    stopMacroRecordingAction->setToolTip("Stop Macro Recording");
+    playMacroAction->setToolTip("Play Macro");
+    runMacroMultipleTimesAction->setToolTip("Run Macro Multiple Times");
+    saveMacroAction->setToolTip("Save Macro");
+    syncVerticalAction->setToolTip("Sync Vertical");
+    syncHorizontalAction->setToolTip("Sync Horizontal");
+
+    // Disable unimplemented actions
+    closeAction->setEnabled(false);
+    closeAllAction->setEnabled(false);
+    saveAllAction->setEnabled(false);
+    printAction->setEnabled(false);
+    zoomInAction->setEnabled(false);
+    zoomOutAction->setEnabled(false);
+    wordWrapAction->setEnabled(false);
+    showAllCharactersAction->setEnabled(false);
+    indentGuideAction->setEnabled(false);
+    functionListAction->setEnabled(false);
+    documentMapAction->setEnabled(false);
+    fileBrowserAction->setEnabled(false);
+    documentListAction->setEnabled(false);
+    startMacroRecordingAction->setEnabled(false);
+    stopMacroRecordingAction->setEnabled(false);
+    playMacroAction->setEnabled(false);
+    runMacroMultipleTimesAction->setEnabled(false);
+    saveMacroAction->setEnabled(false);
+    syncVerticalAction->setEnabled(false);
+    syncHorizontalAction->setEnabled(false);
 }
 
 void MainWindow::newFile() {
@@ -429,7 +567,7 @@ void MainWindow::find() {
     findReplaceDialog->activateWindow();
 }
 
-void MainWindow::shoeReplaceDialog() {
+void MainWindow::showReplaceDialog() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
     
