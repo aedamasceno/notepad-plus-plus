@@ -3,7 +3,6 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QToolBar>
-#include <QIcon>
 #include "ScintillaEditBase.h"
 
 int main(int argc, char *argv[])
@@ -16,9 +15,6 @@ int main(int argc, char *argv[])
     
     // Set window title
     window.setWindowTitle("Notepad++");
-    
-    // Set window icon (using a standard icon for now)
-    window.setWindowIcon(QIcon(":/icons/notepad++.ico"));
     
     // Create menu bar
     QMenuBar* menuBar = window.menuBar();
