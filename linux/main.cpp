@@ -290,9 +290,21 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
         return false;
     }
 
-    QString content = editor->send(SCI_GETTEXT, 0, 0).toString();
-    QTextStream out(&file);
-    out << content;
+    // Get text from Scintilla editor
+    Scintilla::Position length = editor->send(SCI_GETTEXTLENGTH);
+    if (length > 0) {
+        char* buffer = new char[length + 1];
+        editor->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
+        QString content(buffer);
+        delete[] buffer;
+        
+        QTextStream out(&file);
+        out << content;
+    } else {
+        // File is empty
+        QTextStream out(&file);
+        out << "";
+    }
     file.close();
     
     return true;
