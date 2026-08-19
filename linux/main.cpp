@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QTabWidget>
 #include <QCloseEvent>
+#include <QVBoxLayout>
 #include "ScintillaEditBase.h"
 
 class DocumentTab : public QWidget {
