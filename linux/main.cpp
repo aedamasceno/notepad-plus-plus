@@ -14,7 +14,10 @@
 #include <QStatusBar>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QLayout>
+#include <QKeySequence>
 #include "ScintillaEditBase.h"
+#include "findreplace.h"
 
 class DocumentTab : public QWidget {
     Q_OBJECT
@@ -39,7 +42,7 @@ private:
         editor = new ScintillaEditBase(this);
         
         // Set up layout
-        QVBoxLayout* layout = new QVBoxLayout(this);
+        QVBoxLayout* layout = new QVBoxLayout();
         layout->addWidget(editor);
         layout->setContentsMargins(0, 0, 0, 0);
         setLayout(layout);
@@ -75,6 +78,12 @@ public:
         setupUI();
         setupActions();
         createNewTab(); // Ensure at least one tab exists
+        findReplaceDialog = new FindReplaceDialog(this);
+        connect(findReplaceDialog, &FindReplaceDialog::findNext, this, &MainWindow::findNext);
+        connect(findReplaceDialog, &FindReplaceDialog::findPrevious, this, &MainWindow::findPrevious);
+        connect(findReplaceDialog, &FindReplaceDialog::replace, this, &MainWindow::replace);
+        connect(findReplaceDialog, &FindReplaceDialog::replaceAll, this, &MainWindow::replaceAll);
+        connect(findReplaceDialog, &FindReplaceDialog::closed, this, &MainWindow::findReplaceClosed);
     }
 
 private slots:
@@ -92,6 +101,8 @@ private slots:
     void copy();
     void paste();
     void selectAll();
+    void find();
+    void replace();
 
     // Tab management
     void tabChanged(int index);
@@ -111,6 +122,13 @@ private:
     bool closeAllTabs();
     DocumentTab* getCurrentTab() const;
     void updateEditActionsEnabled();
+    
+    // Find/Replace functions
+    void findNext();
+    void findPrevious();
+    void replace();
+    void replaceAll();
+    void findReplaceClosed();
 
     QTabWidget* tabWidget;
     QToolBar* toolBar;
@@ -146,8 +164,15 @@ private:
     QAction *pasteAction;
     QAction *selectAllAction;
     
+    // Search menu actions
+    QAction *findAction;
+    QAction *replaceAction;
+    
     // Counter for untitled documents
     int nextUntitledNumber;
+    
+    // Find/Replace dialog
+    FindReplaceDialog *findReplaceDialog;
 };
 
 void MainWindow::setupUI() {
@@ -225,6 +250,10 @@ void MainWindow::setupActions() {
     pasteAction = new QAction("&Paste", this);
     selectAllAction = new QAction("Select &All", this);
 
+    // Search actions
+    findAction = new QAction("&Find", this);
+    replaceAction = new QAction("&Replace", this);
+
     // Connect file actions
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
@@ -239,6 +268,10 @@ void MainWindow::setupActions() {
     connect(copyAction, &QAction::triggered, this, &MainWindow::copy);
     connect(pasteAction, &QAction::triggered, this, &MainWindow::paste);
     connect(selectAllAction, &QAction::triggered, this, &MainWindow::selectAll);
+
+    // Connect search actions
+    connect(findAction, &QAction::triggered, this, &MainWindow::find);
+    connect(replaceAction, &QAction::triggered, this, &MainWindow::replace);
 
     // Connect tab signals
     connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
@@ -259,7 +292,10 @@ void MainWindow::setupActions() {
     editMenu->addAction(copyAction);
     editMenu->addAction(pasteAction);
     editMenu->addSeparator();
-    editMenu->addAction(selectAllAction); // Fixed typo: was editEditMenu->addAction(selectAllAction)
+    editMenu->addAction(selectAllAction);
+
+    searchMenu->addAction(findAction);
+    searchMenu->addAction(replaceAction);
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -272,6 +308,9 @@ void MainWindow::setupActions() {
     toolBar->addAction(cutAction);
     toolBar->addAction(copyAction);
     toolBar->addAction(pasteAction);
+    toolBar->addSeparator();
+    toolBar->addAction(findAction);
+    toolBar->addAction(replaceAction);
 
     // Set shortcuts
     newAction->setShortcut(QKeySequence::New);
@@ -284,6 +323,8 @@ void MainWindow::setupActions() {
     copyAction->setShortcut(QKeySequence::Copy);
     pasteAction->setShortcut(QKeySequence::Paste);
     selectAllAction->setShortcut(QKeySequence::SelectAll);
+    findAction->setShortcut(QKeySequence::Find);
+    replaceAction->setShortcut(QKeySequence::Replace);
 }
 
 void MainWindow::newFile() {
@@ -374,6 +415,30 @@ void MainWindow::selectAll() {
     if (currentTab) {
         currentTab->getEditor()->send(SCI_SELECTALL);
     }
+}
+
+void MainWindow::find() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    // Show find dialog
+    findReplaceDialog->showFind();
+    findReplaceDialog->setFindText("");
+    findReplaceDialog->show();
+    findReplaceDialog->raise();
+    findReplaceDialog->activateWindow();
+}
+
+void MainWindow::replace() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    // Show replace dialog
+    findReplaceDialog->showReplace();
+    findReplaceDialog->setFindText("");
+    findReplaceDialog->show();
+    findReplaceDialog->raise();
+    findReplaceDialog->activateWindow();
 }
 
 void MainWindow::tabChanged(int index) {
@@ -626,6 +691,205 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
 
 void MainWindow::updateWindowTitle() {
     setWindowTitle("Notepad++");
+}
+
+// Find/Replace functions
+void MainWindow::findNext() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Set target range to search from current position to end of document
+    editor->send(SCI_SETTARGETSTART, currentPos);
+    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    
+    // Perform search
+    Scintilla::Position foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+    
+    if (foundPos != -1) {
+        // Select the match
+        Scintilla::Position endPos = foundPos + findText.length();
+        editor->send(SCI_SETSEL, foundPos, endPos);
+        editor->send(SCI_SCROLLCARET);
+    } else {
+        // Wrap around if enabled
+        if (findReplaceDialog->wrapAround()) {
+            editor->send(SCI_SETTARGETSTART, 0);
+            editor->send(SCI_SETTARGETEND, currentPos);
+            
+            foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+                
+            if (foundPos != -1) {
+                Scintilla::Position endPos = foundPos + findText.length();
+                editor->send(SCI_SETSEL, foundPos, endPos);
+                editor->send(SCI_SCROLLCARET);
+            }
+        }
+    }
+}
+
+void MainWindow::findPrevious() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Set target range to search from beginning to current position
+    editor->send(SCI_SETTARGETSTART, 0);
+    editor->send(SCI_SETTARGETEND, currentPos);
+    
+    // Perform search backwards
+    Scintilla::Position foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+    
+    if (foundPos != -1) {
+        // Select the match
+        Scintilla::Position endPos = foundPos + findText.length();
+        editor->send(SCI_SETSEL, foundPos, endPos);
+        editor->send(SCI_SCROLLCARET);
+    } else {
+        // Wrap around if enabled
+        if (findReplaceDialog->wrapAround()) {
+            editor->send(SCI_SETTARGETSTART, currentPos);
+            editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+            
+            foundPos = editor->send(SCI_FINDTEXT, searchFlags, 
+                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+                
+            if (foundPos != -1) {
+                Scintilla::Position endPos = foundPos + findText.length();
+                editor->send(SCI_SETSEL, foundPos, endPos);
+                editor->send(SCI_SCROLLCARET);
+            }
+        }
+    }
+}
+
+void MainWindow::replace() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    QString replaceText = findReplaceDialog->replaceText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Check if we're at a match
+    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
+    Scintilla::Position selStart = editor->send(SCI_GETSELECTIONSTART);
+    Scintilla::Position selEnd = editor->send(SCI_GETSELECTIONEND);
+    
+    bool isSelectionMatch = (selStart != selEnd) && 
+        (selStart == anchor) &&
+        (selEnd - selStart == static_cast<Scintilla::Position>(findText.length()));
+    
+    if (isSelectionMatch) {
+        // Get the text at current selection
+        char* buffer = new char[findText.length() + 1];
+        editor->send(SCI_GETTEXT, findText.length() + 1, reinterpret_cast<sptr_t>(buffer));
+        QString selectedText(buffer);
+        delete[] buffer;
+        
+        if (selectedText == findText) {
+            // Replace the selection
+            editor->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+            editor->send(SCI_SETSEL, selStart, selStart + replaceText.length());
+            
+            // Continue searching from after replacement
+            findNext();
+        }
+    } else {
+        // Perform search and replace
+        findNext();
+    }
+}
+
+void MainWindow::replaceAll() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    QString replaceText = findReplaceDialog->replaceText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Begin undo action
+    editor->send(SCI_BEGINUNDOACTION);
+    
+    // Set target to entire document
+    editor->send(SCI_SETTARGETSTART, 0);
+    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    
+    // Replace all occurrences
+    Scintilla::Position replaceCount = editor->send(SCI_REPLACETARGET, searchFlags, 
+        reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+    
+    // End undo action
+    editor->send(SCI_ENDUNDOACTION);
+    
+    if (replaceCount > 0) {
+        QMessageBox::information(this, "Replace All", QString("%1 occurrences replaced").arg(replaceCount));
+    }
+}
+
+void MainWindow::findReplaceClosed() {
+    // Nothing to do here for now
 }
 
 int main(int argc, char *argv[])
