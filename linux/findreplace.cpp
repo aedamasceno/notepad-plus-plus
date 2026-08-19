@@ -67,13 +67,6 @@ void FindReplaceDialog::connectSignals() {
     connect(cancelButton, &QPushButton::clicked, this, &FindReplaceDialog::onCancel);
     connect(findLineEdit, &QLineEdit::textChanged, this, &FindReplaceDialog::onTextChanged);
     connect(replaceLineEdit, &QLineEdit::textChanged, this, &FindReplaceDialog::onTextChanged);
-    
-    // Connect the dialog signals
-    connect(this, &FindReplaceDialog::findNext, this, [this]() { emit findNext(); });
-    connect(this, &FindReplaceDialog::findPrevious, this, [this]() { emit findPrevious(); });
-    connect(this, &FindReplaceDialog::replace, this, [this]() { emit replace(); });
-    connect(this, &FindReplaceDialog::replaceAll, this, [this]() { emit replaceAll(); });
-    connect(this, &FindReplaceDialog::closed, this, [this]() { emit closed(); });
 }
 
 void FindReplaceDialog::onFindNext() {
@@ -157,10 +150,10 @@ void FindReplaceDialog::showFind() {
     if (inputLayout->count() > 2) {  // Remove replace line if exists
         QLayoutItem *item = inputLayout->itemAtPosition(1, 0);
         if (item) {
-            QWidget *widget = item->widget();
-            if (widget && widget->text() == "Replace with:") {
-                inputLayout->removeWidget(widget);
-                delete widget;
+            QLabel *label = qobject_cast<QLabel *>(item->widget());
+            if (label && label->text() == "Replace with:") {
+                inputLayout->removeWidget(label);
+                delete label;
                 
                 item = inputLayout->itemAtPosition(1, 1);
                 if (item) {

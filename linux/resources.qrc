@@ -1,0 +1,35 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file alias="new.ico">../PowerEditor/src/icons/light/toolbar/regular/new_off.ico</file>
+    <file alias="open.ico">../PowerEditor/src/icons/light/toolbar/regular/open_off.ico</file>
+    <file alias="save.ico">../PowerEditor/src/icons/light/toolbar/regular/save_off.ico</file>
+    <file alias="undo.ico">../PowerEditor/src/icons/light/toolbar/regular/undo_off.ico</file>
+    <file alias="redo.ico">../PowerEditor/src/icons/light/toolbar/regular/redo_off.ico</file>
+    <file alias="cut.ico">../PowerEditor/src/icons/light/toolbar/regular/cut_off.ico</file>
+    <file alias="copy.ico">../PowerEditor/src/icons/light/toolbar/regular/copy_off.ico</file>
+    <file alias="paste.ico">../PowerEditor/src/icons/light/toolbar/regular/paste_off.ico</file>
+    <file alias="find.ico">../PowerEditor/src/icons/light/toolbar/regular/find_off.ico</file>
+    <file alias="replace.ico">../PowerEditor/src/icons/light/toolbar/regular/findrep_off.ico</file>
+
+    <file alias="close.ico">../PowerEditor/src/icons/light/toolbar/regular/close_off.ico</file>
+    <file alias="closeall.ico">../PowerEditor/src/icons/light/toolbar/regular/closeall_off.ico</file>
+    <file alias="saveall.ico">../PowerEditor/src/icons/light/toolbar/regular/saveall_off.ico</file>
+    <file alias="print.ico">../PowerEditor/src/icons/light/toolbar/regular/print_off.ico</file>
+    <file alias="zoomin.ico">../PowerEditor/src/icons/light/toolbar/regular/zoomIn_off.ico</file>
+    <file alias="zoomout.ico">../PowerEditor/src/icons/light/toolbar/regular/zoomOut_off.ico</file>
+    <file alias="wrap.ico">../PowerEditor/src/icons/light/toolbar/regular/wrap_off.ico</file>
+    <file alias="allchars.ico">../PowerEditor/src/icons/light/toolbar/regular/allChars_off.ico</file>
+    <file alias="indentguide.ico">../PowerEditor/src/icons/light/toolbar/regular/indentGuide_off.ico</file>
+    <file alias="funclist.ico">../PowerEditor/src/icons/light/toolbar/regular/funcList_off.ico</file>
+    <file alias="docmap.ico">../PowerEditor/src/icons/light/toolbar/regular/docMap_off.ico</file>
+    <file alias="filebrowser.ico">../PowerEditor/src/icons/light/toolbar/regular/fileBrowser_off.ico</file>
+    <file alias="doclist.ico">../PowerEditor/src/icons/light/toolbar/regular/docList_off.ico</file>
+    <file alias="record.ico">../PowerEditor/src/icons/light/toolbar/regular/startrecord_off.ico</file>
+    <file alias="stoprecord.ico">../PowerEditor/src/icons/light/toolbar/regular/stoprecord_off.ico</file>
+    <file alias="playrecord.ico">../PowerEditor/src/icons/light/toolbar/regular/playrecord_off.ico</file>
+    <file alias="playrecordmulti.ico">../PowerEditor/src/icons/light/toolbar/regular/playrecord_m_off.ico</file>
+    <file alias="saverecord.ico">../PowerEditor/src/icons/light/toolbar/regular/saverecord_off.ico</file>
+    <file alias="syncv.ico">../PowerEditor/src/icons/light/toolbar/regular/syncV_off.ico</file>
+    <file alias="synch.ico">../PowerEditor/src/icons/light/toolbar/regular/syncH_off.ico</file>
+  </qresource>
+</RCC>
