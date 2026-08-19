@@ -156,16 +156,22 @@ void FindReplaceDialog::showFind() {
     
     // Adjust layout
     if (inputLayout->count() > 2) {  // Remove replace line if exists
-        for (int i = inputLayout->count() - 1; i >= 0; --i) {
-            QLayoutItem *item = inputLayout->itemAt(i);
-            if (item) {
-                QWidget *widget = item->widget();
-                if (widget) {
-                    if (auto *label = qobject_cast<QLabel *>(widget)) {
-                        if (label->text() == "Replace with:") {
-                            inputLayout->removeWidget(widget);
-                            delete widget;
-                            break;
+        QLayoutItem *item = inputLayout->itemAtPosition(1, 0);
+        if (item) {
+            QWidget *widget = item->widget();
+            if (widget) {
+                if (auto *label = qobject_cast<QLabel *>(widget)) {
+                    if (label->text() == "Replace with:") {
+                        inputLayout->removeWidget(widget);
+                        delete widget;
+                        
+                        item = inputLayout->itemAtPosition(1, 1);
+                        if (item) {
+                            QWidget *widget2 = item->widget();
+                            if (widget2) {
+                                inputLayout->removeWidget(widget2);
+                                delete widget2;
+                            }
                         }
                     }
                 }
