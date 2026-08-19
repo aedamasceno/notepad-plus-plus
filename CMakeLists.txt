@@ -34,7 +34,7 @@ file(GLOB_RECURSE QT_EDIT_HEADERS
 )
 
 # ------------------------------------------------------------------
-add_executable(npp_linux linux/main.cpp
+add_executable(npp_linux linux/main.cpp linux/findreplace.cpp
     ${SCINTILLA_CORE_SOURCES}
     ${QT_EDIT_BASE_SOURCES}
     ${QT_EDIT_BASE_HEADERS}
