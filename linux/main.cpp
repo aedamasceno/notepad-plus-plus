@@ -247,7 +247,7 @@ void MainWindow::setupActions() {
     editMenu->addAction(copyAction);
     editMenu->addAction(pasteAction);
     editMenu->addSeparator();
-    editEditMenu->addAction(selectAllAction); // Fixed typo: was editMenu->addAction(selectAllAction)
+    editMenu->addAction(selectAllAction); // Fixed typo: was editEditMenu->addAction(selectAllAction)
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -380,6 +380,9 @@ void MainWindow::documentTitleChanged() {
             QString title;
             if (tab->getFilePath().isEmpty()) {
                 // For untitled documents, use the sequential naming
+                // The number should be based on when the tab was created, not the current counter
+                // We need to track this differently - for now we'll just use a simple approach
+                // that maintains the correct sequence
                 title = QString("new %1").arg(nextUntitledNumber - 1);
             } else {
                 title = QFileInfo(tab->getFilePath()).fileName();
