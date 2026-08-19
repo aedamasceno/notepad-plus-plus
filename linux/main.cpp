@@ -177,7 +177,7 @@ void MainWindow::setupActions() {
     editMenu->addAction(copyAction);
     editMenu->addAction(pasteAction);
     editMenu->addSeparator();
-    editEditMenu->addAction(selectAllAction);
+    editMenu->addAction(selectAllAction);
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
