@@ -45,6 +45,7 @@ private:
 
     ScintillaEditBase* editor;
     QString currentFilePath;
+    QToolBar* toolBar; // Add toolbar member variable
 
     // Menu objects
     QMenu *fileMenu;
@@ -126,8 +127,8 @@ void MainWindow::setupUI() {
     // Help menu
     helpMenu = menuBar->addMenu("&?");
     
-    // Create toolbar container
-    QToolBar* toolBar = addToolBar("Main Toolbar");
+    // Create toolbar container and store it as member
+    toolBar = addToolBar("Main Toolbar");
 }
 
 void MainWindow::setupActions() {
@@ -178,9 +179,7 @@ void MainWindow::setupActions() {
     editMenu->addSeparator();
     editMenu->addAction(selectAllAction);
 
-    // Add actions to toolbar
-    addToolBarBreak();
-    QToolBar* toolBar = findChild<QToolBar*>("Main Toolbar");
+    // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
     toolBar->addAction(openAction);
     toolBar->addAction(saveAction);
