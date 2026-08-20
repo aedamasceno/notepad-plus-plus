@@ -18,7 +18,6 @@
 #include <QKeySequence>
 #include <QIcon>
 #include <QTimer>
-#include <QDebug>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
 #include "sessionmanager.h"
@@ -69,26 +68,6 @@ private:
         // Set up line number margin (margin 0)
         editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER);
         editor->send(SCI_SETMARGINWIDTHN, 0, 20); // Initial width
-        
-        // Diagnostic prints
-        int type = editor->send(SCI_GETMARGINTYPEN, 0);
-        int width = editor->send(SCI_GETMARGINWIDTHN, 0);
-        int margins = editor->send(SCI_GETMARGINS);
-        
-        qDebug() << "DocumentTab setupLineNumbers - Margin 0 Type:" << type 
-                 << "Width:" << width 
-                 << "Total Margins:" << margins;
-        
-        // Add diagnostic after event loop
-        QTimer::singleShot(0, [this]() {
-            int type = editor->send(SCI_GETMARGINTYPEN, 0);
-            int width = editor->send(SCI_GETMARGINWIDTHN, 0);
-            int margins = editor->send(SCI_GETMARGINS);
-            
-            qDebug() << "DocumentTab after init - Margin 0 Type:" << type 
-                     << "Width:" << width 
-                     << "Total Margins:" << margins;
-        });
         
         // Connect to document change signals to recalculate margin width
         connect(editor, &ScintillaEditBase::notify, this, &DocumentTab::onEditorNotify);
