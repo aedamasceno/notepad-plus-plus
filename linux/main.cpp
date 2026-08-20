@@ -167,6 +167,11 @@ private slots:
     void tabCloseRequested(int index);
     void documentTitleChanged();
     void updateStatusBar();
+    
+    // Close actions
+    void closeTabAction();
+    void closeAllTabsAction();
+    void saveAllTabsAction();
 
 private:
     void setupUI();
@@ -383,10 +388,12 @@ void MainWindow::setupActions() {
     connect(findAction, &QAction::triggered, this, &MainWindow::find);
     connect(replaceAction, &QAction::triggered, this, &MainWindow::showReplaceDialog);
 
+    // Connect tab management actions
+    connect(closeAction, &QAction::triggered, this, &MainWindow::closeTabAction);
+    connect(closeAllAction, &QAction::triggered, this, &MainWindow::closeAllTabsAction);
+    connect(saveAllAction, &QAction::triggered, this, &MainWindow::saveAllTabsAction);
+
     // Connect additional toolbar actions (unimplemented)
-    connect(closeAction, &QAction::triggered, this, []() { /* Not implemented */ });
-    connect(closeAllAction, &QAction::triggered, this, []() { /* Not implemented */ });
-    connect(saveAllAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(printAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(zoomInAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(zoomOutAction, &QAction::triggered, this, []() { /* Not implemented */ });
@@ -508,10 +515,12 @@ void MainWindow::setupActions() {
     syncVerticalAction->setToolTip("Sync Vertical");
     syncHorizontalAction->setToolTip("Sync Horizontal");
 
+    // Enable the actions that were previously disabled
+    closeAction->setEnabled(true);
+    closeAllAction->setEnabled(true);
+    saveAllAction->setEnabled(true);
+
     // Disable unimplemented actions
-    closeAction->setEnabled(false);
-    closeAllAction->setEnabled(false);
-    saveAllAction->setEnabled(false);
     printAction->setEnabled(false);
     zoomInAction->setEnabled(false);
     zoomOutAction->setEnabled(false);
@@ -980,6 +989,61 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
 
 void MainWindow::updateWindowTitle() {
     setWindowTitle("Notepad++");
+}
+
+// Close actions implementation
+void MainWindow::closeTabAction()
+{
+    int currentIndex = tabWidget->currentIndex();
+    if (currentIndex >= 0) {
+        closeTab(currentIndex);
+    }
+}
+
+void MainWindow::closeAllTabsAction()
+{
+    if (closeAllTabs()) {
+        // Create a new tab after closing all
+        createNewTab();
+    }
+}
+
+void MainWindow::saveAllTabsAction()
+{
+    bool saveCancelled = false;
+    
+    for (int i = 0; i < tabWidget->count() && !saveCancelled; ++i) {
+        DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
+        if (tab && tab->isDirty()) {
+            if (tab->getFilePath().isEmpty()) {
+                // Untitled tab - use Save As workflow
+                QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "All Files (*)");
+                if (!fileName.isEmpty()) {
+                    if (saveFileToPath(fileName)) {
+                        tab->setFilePath(fileName);
+                        tab->setDirty(false);
+                        
+                        // Remove from session manager since it's now a normal file
+                        if (m_sessionManager) {
+                            m_sessionManager->removeUntitledDocument(tab->getTabNumber());
+                        }
+                    } else {
+                        saveCancelled = true;
+                    }
+                } else {
+                    saveCancelled = true;
+                }
+            } else {
+                // File-backed tab - save directly to current path
+                if (!saveFileToPath(tab->getFilePath())) {
+                    saveCancelled = true;
+                }
+            }
+        }
+    }
+    
+    // Update status bar after saving all
+    updateStatusBar();
 }
 
 // Session management functions
