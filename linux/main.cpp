@@ -972,6 +972,9 @@ void MainWindow::loadSession() {
     if (m_sessionManager->hasUntitledDocuments()) {
         QJsonArray untitledTabs = m_sessionManager->getUntitledTabs();
         
+        // Track the highest restored tab number
+        int highestRestoredTabNumber = 0;
+        
         // Create all tabs in order
         for (int i = 0; i < untitledTabs.size(); ++i) {
             QJsonObject tabObj = untitledTabs[i].toObject();
@@ -1005,6 +1008,11 @@ void MainWindow::loadSession() {
             
             // Update tab text to include asterisk if needed
             documentTitleChanged();
+            
+            // Track highest tab number
+            if (tabNumber > highestRestoredTabNumber) {
+                highestRestoredTabNumber = tabNumber;
+            }
         }
         
         // Restore active tab
@@ -1019,6 +1027,9 @@ void MainWindow::loadSession() {
                 }
             }
         }
+        
+        // Set nextUntitledNumber to highest restored number + 1
+        nextUntitledNumber = highestRestoredTabNumber + 1;
         
         // Don't create a new tab if we already restored some
         return;
