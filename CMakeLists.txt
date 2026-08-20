@@ -56,3 +56,22 @@ target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
 
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD 17)
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD_REQUIRED ON)
+
+include(GNUInstallDirs)
+
+install(TARGETS npp_linux
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES packaging/notepad-plus-plus.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+
+install(FILES packaging/io.github.aedamasceno.notepad-plus-plus.metainfo.xml
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
+)
+
+install(FILES PowerEditor/misc/chameleon/chameleon-pencil-200.png
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps
+    RENAME notepad-plus-plus.png
+)
