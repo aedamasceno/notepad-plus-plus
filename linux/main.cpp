@@ -98,7 +98,7 @@ private:
 
     void onEditorNotify(Scintilla::NotificationData *notification) {
         // Handle notifications to update margin width when line count changes
-        if (notification->nmhdr.code == static_cast<int>(Scintilla::Notification::Modified)) {
+        if (notification->nmhdr.code == Scintilla::Notification::Modified) {
             // Check if we need to update margin width
             Scintilla::Position lineCount = editor->send(SCI_GETLINECOUNT);
             if (lineCount > 0) {
