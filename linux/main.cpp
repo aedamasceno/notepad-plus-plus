@@ -30,6 +30,7 @@ public:
         setupUI();
         setupActions();
         updateTitle();
+        setupLineNumbers();
     }
 
     ScintillaEditBase* getEditor() { return editor; }
@@ -62,6 +63,15 @@ private:
         connect(editor, &ScintillaEditBase::modified, this, &DocumentTab::onTextChanged);
     }
 
+    void setupLineNumbers() {
+        // Set up line number margin (margin 0)
+        editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER);
+        editor->send(SCI_SETMARGINWIDTHN, 0, 20); // Initial width
+        
+        // Connect to document change signals to recalculate margin width
+        connect(editor, &ScintillaEditBase::notify, this, &DocumentTab::onEditorNotify);
+    }
+
     void updateTitle() {
         emit titleChanged();
     }
@@ -82,6 +92,23 @@ private:
             } else {
                 // Empty document
                 m_sessionManager->updateUntitledDocumentContent(tabNumber, "");
+            }
+        }
+    }
+
+    void onEditorNotify(sptr_t id, sptr_t param) {
+        // Handle notifications to update margin width when line count changes
+        if (id == SC_NOTIFICATION_UPDATEUI) {
+            // Check if we need to update margin width
+            Scintilla::Position lineCount = editor->send(SCI_GETLINECOUNT);
+            if (lineCount > 0) {
+                // Calculate the width needed for line numbers
+                int maxLineDigits = QString::number(lineCount).length();
+                int charWidth = editor->send(SCI_TEXTWIDTH, STYLE_LINENUMBER, reinterpret_cast<sptr_t>("9"));
+                int marginWidth = charWidth * (maxLineDigits + 1); // Add extra space for padding
+                
+                // Set the margin width
+                editor->send(SCI_SETMARGINWIDTHN, 0, marginWidth);
             }
         }
     }
