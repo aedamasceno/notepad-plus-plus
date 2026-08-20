@@ -16,6 +16,7 @@
 #include <QWidget>
 #include <QLayout>
 #include <QKeySequence>
+#include <QIcon>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
 #include "sessionmanager.h"
@@ -1232,7 +1233,11 @@ void MainWindow::findReplaceClosed() {
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-
+    
+    app.setApplicationName("Notepad++");
+    app.setApplicationDisplayName("Notepad++");
+    app.setDesktopFileName("notepad-plus-plus");
+    app.setWindowIcon(QIcon(":/icons/app.ico"));
     MainWindow window;
     window.show();
 
