@@ -10,7 +10,6 @@
     <file alias="paste.ico">../PowerEditor/src/icons/light/toolbar/regular/paste_off.ico</file>
     <file alias="find.ico">../PowerEditor/src/icons/light/toolbar/regular/find_off.ico</file>
     <file alias="replace.ico">../PowerEditor/src/icons/light/toolbar/regular/findrep_off.ico</file>
-
     <file alias="close.ico">../PowerEditor/src/icons/light/toolbar/regular/close_off.ico</file>
     <file alias="closeall.ico">../PowerEditor/src/icons/light/toolbar/regular/closeall_off.ico</file>
     <file alias="saveall.ico">../PowerEditor/src/icons/light/toolbar/regular/saveall_off.ico</file>
@@ -31,5 +30,6 @@
     <file alias="saverecord.ico">../PowerEditor/src/icons/light/toolbar/regular/saverecord_off.ico</file>
     <file alias="syncv.ico">../PowerEditor/src/icons/light/toolbar/regular/syncV_off.ico</file>
     <file alias="synch.ico">../PowerEditor/src/icons/light/toolbar/regular/syncH_off.ico</file>
+    <file alias="app.ico">../PowerEditor/src/icons/npp.ico</file>
   </qresource>
 </RCC>
