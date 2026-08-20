@@ -178,7 +178,7 @@ private:
     void setupActions();
     void updateWindowTitle();
     bool loadFile(const QString &filePath);
-    bool saveFileToPath(const QString &filePath);
+    bool saveFileToPath(const QString &filePath, DocumentTab* tab = nullptr);
     void createNewTab(const QString& filePath = "");
     int findTabIndexForFilePath(const QString& filePath);
     bool closeTab(int index);
@@ -421,6 +421,10 @@ void MainWindow::setupActions() {
     fileMenu->addAction(openAction);
     fileMenu->addAction(saveAction);
     fileMenu->addAction(saveAsAction);
+    fileMenu->addAction(saveAllAction);  // Add Save All to File menu
+    fileMenu->addSeparator();
+    fileMenu->addAction(closeAction);    // Add Close to File menu
+    fileMenu->addAction(closeAllAction); // Add Close All to File menu
     fileMenu->addSeparator();
     fileMenu->addAction(exitAction);
 
@@ -957,9 +961,13 @@ bool MainWindow::loadFile(const QString &filePath) {
     return true;
 }
 
-bool MainWindow::saveFileToPath(const QString &filePath) {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return false;
+bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab) {
+    // If no specific tab is provided, use the current tab
+    if (!tab) {
+        tab = getCurrentTab();
+    }
+    
+    if (!tab) return false;
 
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly)) {
@@ -968,10 +976,10 @@ bool MainWindow::saveFileToPath(const QString &filePath) {
     }
 
     // Get text from Scintilla editor
-    Scintilla::Position length = currentTab->getEditor()->send(SCI_GETTEXTLENGTH);
+    Scintilla::Position length = tab->getEditor()->send(SCI_GETTEXTLENGTH);
     if (length > 0) {
         char* buffer = new char[length + 1];
-        currentTab->getEditor()->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
+        tab->getEditor()->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
         QString content(buffer);
         delete[] buffer;
         
@@ -1019,7 +1027,7 @@ void MainWindow::saveAllTabsAction()
                 // Untitled tab - use Save As workflow
                 QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "All Files (*)");
                 if (!fileName.isEmpty()) {
-                    if (saveFileToPath(fileName)) {
+                    if (saveFileToPath(fileName, tab)) {
                         tab->setFilePath(fileName);
                         tab->setDirty(false);
                         
@@ -1035,7 +1043,7 @@ void MainWindow::saveAllTabsAction()
                 }
             } else {
                 // File-backed tab - save directly to current path
-                if (!saveFileToPath(tab->getFilePath())) {
+                if (!saveFileToPath(tab->getFilePath(), tab)) {
                     saveCancelled = true;
                 }
             }
