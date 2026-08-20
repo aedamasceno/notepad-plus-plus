@@ -96,9 +96,13 @@ private:
         }
     }
 
-    void onEditorNotify(sptr_t id, sptr_t param) {
+    void onEditorNotify(Scintilla::NotificationData *notification) {
         // Handle notifications to update margin width when line count changes
-        if (id == SC_NOTIFICATION_UPDATEUI) {
+        switch (notification->nmhdr.code) {
+        case SCEN_CHANGE:
+        case SCEN_MODIFIED:
+        case SCEN_SAVEPOINTLEFT:
+        case SCEN_SAVEPOINTREACHED:
             // Check if we need to update margin width
             Scintilla::Position lineCount = editor->send(SCI_GETLINECOUNT);
             if (lineCount > 0) {
@@ -110,6 +114,9 @@ private:
                 // Set the margin width
                 editor->send(SCI_SETMARGINWIDTHN, 0, marginWidth);
             }
+            break;
+        default:
+            break;
         }
     }
 
