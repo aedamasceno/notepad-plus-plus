@@ -49,11 +49,15 @@ file(GLOB_RECURSE LEXILLA_LEXLIB_SOURCES
 )
 
 # Gather Lexilla lexer sources
+# Exclude Windows-specific files that cause build failures on Linux
 file(GLOB_RECURSE LEXILLA_LEXERS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexers/Lex*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexers/Lex*.cxx"
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexers/Lex*.cpp"
 )
+
+# Filter out Windows-specific lexer files
+list(FILTER LEXILLA_LEXERS_SOURCES EXCLUDE REGEX "LexUser\\.cxx$")
 
 add_executable(npp_linux linux/main.cpp linux/findreplace.cpp linux/sessionmanager.cpp linux/resources.qrc
     ${SCINTILLA_CORE_SOURCES}
