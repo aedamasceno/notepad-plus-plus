@@ -312,8 +312,9 @@ private:
             // Tags (blue)
             editor->send(SCI_STYLESETFORE, SCE_H_TAG, 0x0000FF);  // Tag color
             
-            // Strings (green)
-            editor->send(SCI_STYLESETFORE, SCE_H_STRING, 0x008000);  // String color
+            // Strings (green) - Use both double and single string styles
+            editor->send(SCI_STYLESETFORE, SCE_H_DOUBLESTRING, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_H_SINGLESTRING, 0x008000);  // String color
             
             // Comments (gray)
             editor->send(SCI_STYLESETFORE, SCE_H_COMMENT, 0x808080);  // Comment color
@@ -325,18 +326,19 @@ private:
             // Tags (blue)
             editor->send(SCI_STYLESETFORE, SCE_H_TAG, 0x0000FF);  // Tag color
             
-            // Strings (green)
-            editor->send(SCI_STYLESETFORE, SCE_H_STRING, 0x008000);  // String color
+            // Strings (green) - Use both double and single string styles
+            editor->send(SCI_STYLESETFORE, SCE_H_DOUBLESTRING, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_H_SINGLESTRING, 0x008000);  // String color
             
             // Comments (gray)
             editor->send(SCI_STYLESETFORE, SCE_H_COMMENT, 0x808080);  // Comment color
             
         } else if (lexerName == "css") {
             // Selectors (blue)
-            editor->send(SCI_STYLESETFORE, SCE_CSS_TAG, 0x0000FF);  // Selector color
+            editor->send(SCI_STYLESETFORE, SCE_CSS_IDENTIFIER, 0x0000FF);  // Selector color
             
-            // Properties (green)
-            editor->send(SCI_STYLESETFORE, SCE_CSS_PROPERTY, 0x008000);  // Property color
+            // Properties (green) - Use identifier instead of property
+            editor->send(SCI_STYLESETFORE, SCE_CSS_IDENTIFIER, 0x008000);  // Property color
             
             // Values (brown)
             editor->send(SCI_STYLESETFORE, SCE_CSS_VALUE, 0xA52A2A);  // Value color
@@ -377,11 +379,11 @@ private:
             editor->send(SCI_STYLESETFORE, SCE_PROPS_COMMENT, 0x808080);  // Comment color
             
         } else if (lexerName == "yaml") {
-            // Keys (blue)
-            editor->send(SCI_STYLESETFORE, SCE_YAML_WORD, 0x0000FF);  // Key color
+            // Keys (blue) - Use keyword instead of word
+            editor->send(SCI_STYLESETFORE, SCE_YAML_KEYWORD, 0x0000FF);  // Key color
             
-            // Strings (green)
-            editor->send(SCI_STYLESETFORE, SCE_YAML_STRING, 0x008000);  // String color
+            // Strings (green) - Use text instead of string
+            editor->send(SCI_STYLESETFORE, SCE_YAML_TEXT, 0x008000);  // String color
             
             // Comments (gray)
             editor->send(SCI_STYLESETFORE, SCE_YAML_COMMENT, 0x808080);  // Comment color
