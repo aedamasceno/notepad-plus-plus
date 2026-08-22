@@ -34,12 +34,20 @@ file(GLOB_RECURSE QT_EDIT_HEADERS
 )
 
 # ------------------------------------------------------------------
+# Gather Lexilla sources
+file(GLOB_RECURSE LEXILLA_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/src/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/src/*.cxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/src/*.cpp"
+)
+
 add_executable(npp_linux linux/main.cpp linux/findreplace.cpp linux/sessionmanager.cpp linux/resources.qrc
     ${SCINTILLA_CORE_SOURCES}
     ${QT_EDIT_BASE_SOURCES}
     ${QT_EDIT_BASE_HEADERS}
     ${QT_EDIT_SOURCES}
     ${QT_EDIT_HEADERS}
+    ${LEXILLA_SOURCES}
 )
 
 target_include_directories(npp_linux PRIVATE
@@ -47,10 +55,12 @@ target_include_directories(npp_linux PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEditBase"
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/qt/ScintillaEdit"
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/include"
 )
 
 # Define the macro that enables Qt specific code in Scintilla
-target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1)
+target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1 LEXILLA_STATIC=1)
 
 target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
 

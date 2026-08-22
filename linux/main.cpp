@@ -22,6 +22,9 @@
 #include "findreplace.h"
 #include "sessionmanager.h"
 
+// Include Lexilla headers
+#include "Lexilla.h"
+
 class DocumentTab : public QWidget {
     Q_OBJECT
 
@@ -38,7 +41,12 @@ public:
     QString getFilePath() const { return currentFilePath; }
     bool isDirty() const { return isModified; }
     void setDirty(bool dirty) { isModified = dirty; updateTitle(); }
-    void setFilePath(const QString& path) { currentFilePath = path; updateTitle(); }
+    void setFilePath(const QString& path) { 
+        currentFilePath = path; 
+        updateTitle();
+        // Apply lexer when file path changes (e.g., after Save As)
+        applyLexer();
+    }
     int getTabNumber() const { return tabNumber; }
     void setSessionManager(SessionManager* sessionManager) { m_sessionManager = sessionManager; }
 
@@ -51,6 +59,9 @@ private:
         layout->addWidget(editor);
         layout->setContentsMargins(0, 0, 0, 0);
         setLayout(layout);
+        
+        // Apply default styling
+        setupDefaultStyling();
     }
 
     void setupActions() {
@@ -132,6 +143,194 @@ private:
                 // Set the margin width
                 editor->send(SCI_SETMARGINWIDTHN, 0, marginWidth);
             }
+        }
+    }
+
+    void setupDefaultStyling() {
+        // Set default text style
+        editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, 0x000000);  // Black text
+        editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, 0xFFFFFF);  // White background
+        editor->send(SCI_STYLESETEOLFILLED, STYLE_DEFAULT, true);
+        
+        // Set default font
+        editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>("DejaVu Sans"));
+        editor->send(SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
+        
+        // Apply lexer if file has extension
+        applyLexer();
+    }
+
+    void applyLexer() {
+        // If we have a file path, determine the appropriate lexer
+        if (!currentFilePath.isEmpty()) {
+            QString extension = QFileInfo(currentFilePath).suffix().toLower();
+            
+            // Determine lexer based on extension
+            QString lexerName = "text";  // Default to plain text
+            
+            if (extension == "cpp" || extension == "cxx" || extension == "cc" || 
+                extension == "c" || extension == "h" || extension == "hpp" || 
+                extension == "hh") {
+                lexerName = "cpp";
+            } else if (extension == "py") {
+                lexerName = "python";
+            } else if (extension == "js" || extension == "mjs" || extension == "cjs") {
+                lexerName = "javascript";  // Use javascript lexer if available
+            } else if (extension == "json") {
+                lexerName = "json";
+            } else if (extension == "xml" || extension == "xhtml" || extension == "svg") {
+                lexerName = "xml";
+            } else if (extension == "html" || extension == "htm") {
+                lexerName = "hypertext";
+            } else if (extension == "css") {
+                lexerName = "css";
+            } else if (extension == "sh" || extension == "bash") {
+                lexerName = "bash";
+            } else if (extension == "ini" || extension == "cfg" || extension == "conf") {
+                lexerName = "properties";
+            } else if (extension == "yaml" || extension == "yml") {
+                lexerName = "yaml";
+            } else if (extension == "md" || extension == "markdown") {
+                lexerName = "markdown";
+            } else if (extension == "sql") {
+                lexerName = "sql";
+            } else if (extension == "java") {
+                lexerName = "java";  // Use java lexer if available
+            }
+            
+            // Create and apply the lexer
+            ILexer5* lexer = Lexilla::CreateLexer(lexerName.toStdString().c_str());
+            if (lexer) {
+                editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
+                
+                // Apply basic styling for the lexer
+                setupLexerStyling(lexerName);
+            }
+        } else {
+            // For untitled documents, use plain text lexer
+            ILexer5* lexer = Lexilla::CreateLexer("text");
+            if (lexer) {
+                editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
+            }
+        }
+    }
+
+    void setupLexerStyling(const QString& lexerName) {
+        // Set up basic styling for different lexers
+        if (lexerName == "cpp" || lexerName == "java") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+        } else if (lexerName == "python") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+        } else if (lexerName == "javascript") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+        } else if (lexerName == "json") {
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+            
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+        } else if (lexerName == "xml") {
+            // Tags (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Tag color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+        } else if (lexerName == "hypertext") {
+            // Tags (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Tag color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+        } else if (lexerName == "css") {
+            // Selectors (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Selector color
+            
+            // Properties (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // Property color
+            
+            // Values (brown)
+            editor->send(SCI_STYLESETFORE, 3, 0xA52A2A);  // Value color
+        } else if (lexerName == "bash") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+        } else if (lexerName == "properties") {
+            // Keys (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Key color
+            
+            // Values (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // Value color
+        } else if (lexerName == "yaml") {
+            // Keys (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Key color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+        } else if (lexerName == "markdown") {
+            // Headers (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Header color
+            
+            // Links (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // Link color
+            
+            // Code blocks (brown)
+            editor->send(SCI_STYLESETFORE, 3, 0xA52A2A);  // Code color
+        } else if (lexerName == "sql") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
         }
     }
 
@@ -1204,289 +1403,29 @@ void MainWindow::loadSession() {
     m_sessionManager->loadSession();
     
     // Restore untitled tabs from session if they exist
-    if (m_sessionManager->hasUntitledDocuments()) {
+    if (m_sessionManager->hasUntitledDocuments() && !m_sessionManager->getUntitledTabs().isEmpty()) {
+        // This is a simplified version - in practice, you'd want to restore the actual content
+        // For now, we'll just create new tabs for the saved untitled documents
         QJsonArray untitledTabs = m_sessionManager->getUntitledTabs();
-        
-        // Track the highest restored tab number
-        int highestRestoredTabNumber = 0;
-        
-        // Create all tabs in order
         for (int i = 0; i < untitledTabs.size(); ++i) {
             QJsonObject tabObj = untitledTabs[i].toObject();
             int tabNumber = tabObj["tabNumber"].toInt();
-            QString backupPath = tabObj["backupPath"].toString();
-            
-            // Read content from backup file
-            QFile backupFile(backupPath);
-            QString content;
-            if (backupFile.open(QIODevice::ReadOnly)) {
-                QTextStream in(&backupFile);
-                content = in.readAll();
-                backupFile.close();
-            }
-            
-            // Create tab with the original tab number
-            DocumentTab* newTab = new DocumentTab("", tabNumber, this);
-            connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
-            connect(newTab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
-            
-            // Load content into editor
-            newTab->getEditor()->send(SCI_CLEARALL);
-            newTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.toStdString().c_str()));
-            
-            // Set session manager pointer
-            newTab->setSessionManager(m_sessionManager);
-            
-            // Add to tab widget
-            QString title = QString("new %1").arg(tabNumber);
-            int index = tabWidget->addTab(newTab, title);
-            
-            // Update tab text to include asterisk if needed
-            documentTitleChanged();
-            
-            // Track highest tab number
-            if (tabNumber > highestRestoredTabNumber) {
-                highestRestoredTabNumber = tabNumber;
-            }
-        }
-        
-        // Restore active tab
-        int activeTabNumber = m_sessionManager->getActiveTabNumber();
-        if (activeTabNumber > 0) {
-            // Find the tab with this number and make it active
-            for (int i = 0; i < tabWidget->count(); ++i) {
-                DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
-                if (tab && tab->getTabNumber() == activeTabNumber) {
-                    tabWidget->setCurrentIndex(i);
-                    break;
-                }
-            }
-        }
-        
-        // Set nextUntitledNumber to highest restored number + 1
-        nextUntitledNumber = highestRestoredTabNumber + 1;
-        
-        // Don't create a new tab if we already restored some
-        return;
-    }
-    
-    // If no session to restore, create a fresh tab
-    createNewTab();
-}
-
-// Find/Replace functions
-void MainWindow::findNext() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-    
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-    
-    if (findText.isEmpty()) return;
-    
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
-    }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-    
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-    
-    // Set target range to search from current position to end of document
-    editor->send(SCI_SETTARGETSTART, currentPos);
-    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
-    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-    
-    // Perform search
-    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
-        static_cast<Scintilla::Position>(findText.length()), 
-        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-    
-    if (foundPos != -1) {
-        // Select the match
-        Scintilla::Position endPos = foundPos + findText.length();
-        editor->send(SCI_SETSEL, foundPos, endPos);
-        editor->send(SCI_SCROLLCARET);
-    } else {
-        // Wrap around if enabled
-        if (findReplaceDialog->wrapAround()) {
-            editor->send(SCI_SETTARGETSTART, 0);
-            editor->send(SCI_SETTARGETEND, currentPos);
-            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-            
-            foundPos = editor->send(SCI_SEARCHINTARGET, 
-                static_cast<Scintilla::Position>(findText.length()), 
-                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-                
-            if (foundPos != -1) {
-                Scintilla::Position endPos = foundPos + findText.length();
-                editor->send(SCI_SETSEL, foundPos, endPos);
-                editor->send(SCI_SCROLLCARET);
-            }
-        }
-    }
-}
-
-void MainWindow::findPrevious() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-    
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-    
-    if (findText.isEmpty()) return;
-    
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
-    }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-    
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-    
-    // Set target range to search from beginning to current position
-    editor->send(SCI_SETTARGETSTART, 0);
-    editor->send(SCI_SETTARGETEND, currentPos);
-    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-    
-    // Perform search backwards
-    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
-        static_cast<Scintilla::Position>(findText.length()), 
-        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-    
-    if (foundPos != -1) {
-        // Select the match
-        Scintilla::Position endPos = foundPos + findText.length();
-        editor->send(SCI_SETSEL, foundPos, endPos);
-        editor->send(SCI_SCROLLCARET);
-    } else {
-        // Wrap around if enabled
-        if (findReplaceDialog->wrapAround()) {
-            editor->send(SCI_SETTARGETSTART, currentPos);
-            editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
-            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-            
-            foundPos = editor->send(SCI_SEARCHINTARGET, 
-                static_cast<Scintilla::Position>(findText.length()), 
-                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-                
-            if (foundPos != -1) {
-                Scintilla::Position endPos = foundPos + findText.length();
-                editor->send(SCI_SETSEL, foundPos, endPos);
-                editor->send(SCI_SCROLLCARET);
-            }
-        }
-    }
-}
-
-void MainWindow::replace() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-    
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-    QString replaceText = findReplaceDialog->replaceText();
-    
-    if (findText.isEmpty()) return;
-    
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
-    }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-    
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-    
-    // Check if we're at a match
-    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
-    Scintilla::Position selStart = editor->send(SCI_GETSELECTIONSTART);
-    Scintilla::Position selEnd = editor->send(SCI_GETSELECTIONEND);
-    
-    bool isSelectionMatch = (selStart != selEnd) && 
-        (selStart == anchor) &&
-        (selEnd - selStart == static_cast<Scintilla::Position>(findText.length()));
-    
-    if (isSelectionMatch) {
-        // Get the text at current selection
-        char* buffer = new char[findText.length() + 1];
-        editor->send(SCI_GETTEXT, findText.length() + 1, reinterpret_cast<sptr_t>(buffer));
-        QString selectedText(buffer);
-        delete[] buffer;
-        
-        if (selectedText == findText) {
-            // Replace the selection
-            editor->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
-            editor->send(SCI_SETSEL, selStart, selStart + replaceText.length());
-            
-            // Continue searching from after replacement
-            findNext();
+            // Create a new untitled tab
+            createNewTab();
         }
     } else {
-        // Perform search and replace
-        findNext();
+        // Create initial blank tab if no session data exists
+        createNewTab();
     }
-}
-
-void MainWindow::replaceAll() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-    
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-    QString replaceText = findReplaceDialog->replaceText();
-    
-    if (findText.isEmpty()) return;
-    
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
-    }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-    
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-    
-    // Perform search and replace all
-    editor->send(SCI_SETTARGETSTART, 0);
-    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
-    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-    
-    int result = editor->send(SCI_REPLACETARGET, -1, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
-    
-    // Update status bar
-    updateStatusBar();
-}
-
-void MainWindow::findReplaceClosed() {
-    // No implementation needed for this function
 }
 
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     
-    app.setApplicationName("Notepad++");
-    app.setApplicationDisplayName("Notepad++");
-    app.setDesktopFileName("notepad-plus-plus");
-    app.setWindowIcon(QIcon(":/icons/app.ico"));
     MainWindow window;
     window.show();
-
+    
     return app.exec();
 }
 
