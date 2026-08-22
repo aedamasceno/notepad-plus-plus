@@ -1428,7 +1428,7 @@ void MainWindow::findNext()
     if (!currentTab) return;
     
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->getFindText();
+    QString findText = findReplaceDialog->GetFindText();
     
     if (!findText.isEmpty()) {
         // Get the current position
@@ -1450,7 +1450,7 @@ void MainWindow::findPrevious()
     if (!currentTab) return;
     
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->getFindText();
+    QString findText = findReplaceDialog->GetFindText();
     
     if (!findText.isEmpty()) {
         // Get the current position
@@ -1472,8 +1472,8 @@ void MainWindow::replace()
     if (!currentTab) return;
     
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->getFindText();
-    QString replaceText = findReplaceDialog->getReplaceText();
+    QString findText = findReplaceDialog->GetFindText();
+    QString replaceText = findReplaceDialog->GetReplaceText();
     
     if (!findText.isEmpty()) {
         // Get the current position
@@ -1498,8 +1498,8 @@ void MainWindow::replaceAll()
     if (!currentTab) return;
     
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->getFindText();
-    QString replaceText = findReplaceDialog->getReplaceText();
+    QString findText = findReplaceDialog->GetFindText();
+    QString replaceText = findReplaceDialog->GetReplaceText();
     
     if (!findText.isEmpty()) {
         // Replace all occurrences
@@ -1510,8 +1510,8 @@ void MainWindow::replaceAll()
 void MainWindow::findReplaceClosed()
 {
     // Reset the find/replace dialog when it's closed
-    findReplaceDialog->setFindText("");
-    findReplaceDialog->setReplaceText("");
+    findReplaceDialog->SetFindText("");
+    findReplaceDialog->SetReplaceText("");
 }
 
 int main(int argc, char *argv[])
