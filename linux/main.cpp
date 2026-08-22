@@ -866,7 +866,7 @@ void MainWindow::updateStatusBar() {
     // Get total line count
     int lineCount = editor->send(SCI_GETLINECOUNT);
     
-    // Get EOL mode
+    // Get E_EOL mode
     int eolMode = editor->send(SCI_GETEOLMODE);
     QString eolStr;
     switch (eolMode) {
