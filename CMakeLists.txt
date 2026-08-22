@@ -57,6 +57,7 @@ target_include_directories(npp_linux PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/scintilla/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexlib"
 )
 
 # Define the macro that enables Qt specific code in Scintilla

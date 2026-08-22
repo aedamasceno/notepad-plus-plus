@@ -22,6 +22,8 @@
 #include "findreplace.h"
 #include "sessionmanager.h"
 
+// Include Scintilla ILexer header before Lexilla.h
+#include "ILexer.h"
 // Include Lexilla headers
 #include "Lexilla.h"
 
@@ -199,7 +201,7 @@ private:
             }
             
             // Create and apply the lexer
-            ILexer5* lexer = Lexilla::CreateLexer(lexerName.toStdString().c_str());
+            Scintilla::ILexer5* lexer = Lexilla::CreateLexer(lexerName.toStdString().c_str());
             if (lexer) {
                 editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
                 
@@ -208,7 +210,7 @@ private:
             }
         } else {
             // For untitled documents, use plain text lexer
-            ILexer5* lexer = Lexilla::CreateLexer("text");
+            Scintilla::ILexer5* lexer = Lexilla::CreateLexer("text");
             if (lexer) {
                 editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
             }
