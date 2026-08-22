@@ -60,10 +60,8 @@ target_include_directories(npp_linux PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexlib"
 )
 
-# Add compile option to include cstdint for Lexilla sources to fix intptr_t undefined error
-set_property(TARGET npp_linux PROPERTY COMPILE_FLAGS 
-    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CXX_FLAGS} -include cstdint>"
-)
+# Add compile option to include cstdint for all sources to fix intptr_t undefined error
+target_compile_options(npp_linux PRIVATE -include cstdint)
 
 # Define the macro that enables Qt specific code in Scintilla
 target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1 LEXILLA_STATIC=1)
