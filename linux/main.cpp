@@ -27,7 +27,7 @@ class DocumentTab : public QWidget {
 
 public:
     DocumentTab(const QString& filePath = "", int tabNumber = 0, QWidget* parent = nullptr) 
-        : QWidget(parent), currentFilePath(filePath), isModified(false), tabNumber(tabNumber) {
+        : QWidget(parent), currentFilePath(filePath), isModified(false), tabNumber(tabNumber), m_shouldRegisterWithSessionManager(false) {
         setupUI();
         setupActions();
         updateTitle();
@@ -58,6 +58,27 @@ private:
         connect(editor, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
             isModified = dirty;
             updateTitle();
+            
+            // If this is the first modification and we haven't registered yet,
+            // register with session manager now
+            if (dirty && m_shouldRegisterWithSessionManager && m_sessionManager) {
+                // Get current content from editor
+                Scintilla::Position length = editor->send(SCI_GETTEXTLENGTH);
+                if (length > 0) {
+                    char* buffer = new char[length + 1];
+                    editor->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
+                    QString content(buffer);
+                    delete[] buffer;
+                    
+                    // Register with session manager
+                    m_sessionManager->addUntitledDocument(content, tabNumber);
+                } else {
+                    // Empty document - still register to keep track of it
+                    m_sessionManager->addUntitledDocument("", tabNumber);
+                }
+                
+                m_shouldRegisterWithSessionManager = false;
+            }
         });
         
         // Connect modification signal for session management
@@ -125,6 +146,9 @@ private:
     
     // Session manager pointer - will be set by MainWindow
     SessionManager* m_sessionManager = nullptr;
+    
+    // Flag to indicate if we should register with session manager on first modification
+    bool m_shouldRegisterWithSessionManager;
 };
 
 class MainWindow : public QMainWindow {
@@ -890,12 +914,8 @@ void MainWindow::createNewTab(const QString& filePath) {
         title = QString("new %1").arg(nextUntitledNumber);
         nextUntitledNumber++;
         
-        // Add to session manager
-        if (m_sessionManager) {
-            m_sessionManager->addUntitledDocument("", nextUntitledNumber - 1);
-            // Set the session manager pointer in the tab using the setter
-            newTab->setSessionManager(m_sessionManager);
-        }
+        // Set the session manager pointer in the tab using the setter
+        newTab->setSessionManager(m_sessionManager);
     } else {
         // Check if file is already open
         int existingIndex = findTabIndexForFilePath(filePath);
