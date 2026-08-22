@@ -188,6 +188,7 @@ private slots:
     void toggleWordWrap();
     void zoomIn();
     void zoomOut();
+    void showAllCharacters();
 
     // Tab management
     void tabChanged(int index);
@@ -425,7 +426,7 @@ void MainWindow::setupActions() {
     connect(zoomInAction, &QAction::triggered, this, &MainWindow::zoomIn);
     connect(zoomOutAction, &QAction::triggered, this, &MainWindow::zoomOut);
     connect(wordWrapAction, &QAction::triggered, this, &MainWindow::toggleWordWrap);
-    connect(showAllCharactersAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(showAllCharactersAction, &QAction::triggered, this, &MainWindow::showAllCharacters);
     connect(indentGuideAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(functionListAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(documentMapAction, &QAction::triggered, this, []() { /* Not implemented */ });
@@ -495,6 +496,7 @@ void MainWindow::setupActions() {
     toolBar->addAction(zoomOutAction);
     toolBar->addSeparator();
     toolBar->addAction(showAllCharactersAction);
+    toolBar->addSeparator();
     toolBar->addAction(indentGuideAction);
     toolBar->addSeparator();
     toolBar->addAction(functionListAction);
@@ -557,10 +559,11 @@ void MainWindow::setupActions() {
     wordWrapAction->setCheckable(true);
     zoomInAction->setEnabled(true);
     zoomOutAction->setEnabled(true);
+    showAllCharactersAction->setEnabled(true);
+    showAllCharactersAction->setCheckable(true);
 
     // Disable unimplemented actions
     printAction->setEnabled(false);
-    showAllCharactersAction->setEnabled(false);
     indentGuideAction->setEnabled(false);
     functionListAction->setEnabled(false);
     documentMapAction->setEnabled(false);
@@ -770,6 +773,31 @@ void MainWindow::zoomOut() {
     editor->send(SCI_ZOOMOUT);
 }
 
+void MainWindow::showAllCharacters() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Get current state
+    int currentViewWS = editor->send(SCI_GETVIEWWS);
+    bool isCurrentlyVisible = (currentViewWS == SCWS_VISIBLEALWAYS);
+    
+    // Toggle the visibility
+    int newViewWS = isCurrentlyVisible ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS;
+    
+    // Apply the new setting
+    editor->send(SCI_SETVIEWWS, newViewWS);
+    
+    // Also toggle EOL visibility
+    bool currentViewEOL = editor->send(SCI_GETVIEWEOL);
+    int newViewEOL = currentViewEOL ? 0 : 1;
+    editor->send(SCI_SETVIEWEOL, newViewEOL);
+    
+    // Update the action's checked state
+    showAllCharactersAction->setChecked(!isCurrentlyVisible);
+}
+
 void MainWindow::tabChanged(int index) {
     updateEditActionsEnabled();
     updateStatusBar();
@@ -780,6 +808,12 @@ void MainWindow::tabChanged(int index) {
         ScintillaEditBase* editor = currentTab->getEditor();
         int wrapMode = editor->send(SCI_GETWRAPMODE);
         wordWrapAction->setChecked(wrapMode == SC_WRAP_WORD);
+        
+        // Update show all characters action state to match current tab
+        int viewWS = editor->send(SCI_GETVIEWWS);
+        bool isWSVisible = (viewWS == SCWS_VISIBLEALWAYS);
+        bool viewEOL = editor->send(SCI_GETVIEWEOL);
+        showAllCharactersAction->setChecked(isWSVisible || viewEOL);
     }
 }
 
