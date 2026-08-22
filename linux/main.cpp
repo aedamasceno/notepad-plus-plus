@@ -201,7 +201,7 @@ private:
             }
             
             // Create and apply the lexer
-            Scintilla::ILexer5* lexer = Lexilla::CreateLexer(lexerName.toStdString().c_str());
+            Scintilla::ILexer5* lexer = CreateLexer(lexerName.toStdString().c_str());
             if (lexer) {
                 editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
                 
@@ -210,7 +210,7 @@ private:
             }
         } else {
             // For untitled documents, use plain text lexer
-            Scintilla::ILexer5* lexer = Lexilla::CreateLexer("text");
+            Scintilla::ILexer5* lexer = CreateLexer("text");
             if (lexer) {
                 editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
             }
