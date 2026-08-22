@@ -26,6 +26,7 @@
 #include "ILexer.h"
 // Include Lexilla headers
 #include "Lexilla.h"
+#include "SciLexer.h"
 
 class DocumentTab : public QWidget {
     Q_OBJECT
@@ -168,7 +169,7 @@ private:
             QString extension = QFileInfo(currentFilePath).suffix().toLower();
             
             // Determine lexer based on extension
-            QString lexerName = "text";  // Default to plain text
+            QString lexerName = "null";  // Default to null lexer
             
             if (extension == "cpp" || extension == "cxx" || extension == "cc" || 
                 extension == "c" || extension == "h" || extension == "hpp" || 
@@ -177,7 +178,7 @@ private:
             } else if (extension == "py") {
                 lexerName = "python";
             } else if (extension == "js" || extension == "mjs" || extension == "cjs") {
-                lexerName = "javascript";  // Use javascript lexer if available
+                lexerName = "javascript";
             } else if (extension == "json") {
                 lexerName = "json";
             } else if (extension == "xml" || extension == "xhtml" || extension == "svg") {
@@ -197,7 +198,7 @@ private:
             } else if (extension == "sql") {
                 lexerName = "sql";
             } else if (extension == "java") {
-                lexerName = "java";  // Use java lexer if available
+                lexerName = "java";
             }
             
             // Create and apply the lexer
@@ -205,135 +206,263 @@ private:
             if (lexer) {
                 editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
                 
-                // Apply basic styling for the lexer
+                // Apply styling for the lexer
                 setupLexerStyling(lexerName);
             }
         } else {
-            // For untitled documents, use plain text lexer
-            Scintilla::ILexer5* lexer = CreateLexer("text");
+            // For untitled documents, use null lexer
+            Scintilla::ILexer5* lexer = CreateLexer("null");
             if (lexer) {
                 editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
+                setupLexerStyling("null");
             }
         }
     }
 
     void setupLexerStyling(const QString& lexerName) {
-        // Set up basic styling for different lexers
-        if (lexerName == "cpp" || lexerName == "java") {
+        // Clear existing styles
+        editor->send(SCI_CLEARDOCUMENTSTYLE);
+        
+        if (lexerName == "cpp") {
             // Keywords (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            editor->send(SCI_STYLESETFORE, SCE_C_WORD, 0x0000FF);  // Keyword color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_C_STRING, 0x008000);  // String color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_C_COMMENT, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_C_COMMENTLINE, 0x808080);  // Comment color
             
             // Numbers (brown)
-            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+            editor->send(SCI_STYLESETFORE, SCE_C_NUMBER, 0xA52A2A);  // Number color
+            
+            // Operators
+            editor->send(SCI_STYLESETFORE, SCE_C_OPERATOR, 0x000000);  // Operator color
+            
+            // Preprocessor
+            editor->send(SCI_STYLESETFORE, SCE_C_PREPROCESSOR, 0x008080);  // Preprocessor color
+            
+            // Set keywords
+            const char* cppKeywords = "auto break case char const continue default do double else enum "
+                                      "extern float for goto if int long register return short signed sizeof "
+                                      "static struct switch typedef union unsigned void volatile while";
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(cppKeywords));
+            
         } else if (lexerName == "python") {
             // Keywords (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            editor->send(SCI_STYLESETFORE, SCE_P_WORD, 0x0000FF);  // Keyword color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_P_STRING, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_P_CHARACTER, 0x008000);  // Character color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_P_COMMENTLINE, 0x808080);  // Comment color
             
             // Numbers (brown)
-            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+            editor->send(SCI_STYLESETFORE, SCE_P_NUMBER, 0xA52A2A);  // Number color
+            
+            // Operators
+            editor->send(SCI_STYLESETFORE, SCE_P_OPERATOR, 0x000000);  // Operator color
+            
+            // Set keywords
+            const char* pythonKeywords = "and as assert break class continue def del elif else "
+                                         "except exec finally for from global if import in is "
+                                         "lambda not or pass print raise return try while with yield";
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(pythonKeywords));
+            
         } else if (lexerName == "javascript") {
             // Keywords (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            editor->send(SCI_STYLESETFORE, SCE_C_WORD, 0x0000FF);  // Keyword color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_C_STRING, 0x008000);  // String color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_C_COMMENT, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_C_COMMENTLINE, 0x808080);  // Comment color
             
             // Numbers (brown)
-            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+            editor->send(SCI_STYLESETFORE, SCE_C_NUMBER, 0xA52A2A);  // Number color
+            
+            // Operators
+            editor->send(SCI_STYLESETFORE, SCE_C_OPERATOR, 0x000000);  // Operator color
+            
+            // Set keywords
+            const char* jsKeywords = "break case catch class const continue debugger default "
+                                     "delete do else export extends false finally for function "
+                                     "if import in instanceof let new null return super switch "
+                                     "this throw true try typeof var void while with yield";
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(jsKeywords));
+            
         } else if (lexerName == "json") {
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_JSON_STRING, 0x008000);  // String color
             
             // Numbers (brown)
-            editor->send(SCI_STYLESETFORE, 4, 0xA52A2A);  // Number color
+            editor->send(SCI_STYLESETFORE, SCE_JSON_NUMBER, 0xA52A2A);  // Number color
             
             // Keywords (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            editor->send(SCI_STYLESETFORE, SCE_JSON_KEYWORD, 0x0000FF);  // Keyword color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, SCE_JSON_COMMENT, 0x808080);  // Comment color
+            
         } else if (lexerName == "xml") {
             // Tags (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Tag color
+            editor->send(SCI_STYLESETFORE, SCE_H_TAG, 0x0000FF);  // Tag color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_H_STRING, 0x008000);  // String color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_H_COMMENT, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, SCE_H_NUMBER, 0xA52A2A);  // Number color
+            
         } else if (lexerName == "hypertext") {
             // Tags (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Tag color
+            editor->send(SCI_STYLESETFORE, SCE_H_TAG, 0x0000FF);  // Tag color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_H_STRING, 0x008000);  // String color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_H_COMMENT, 0x808080);  // Comment color
+            
         } else if (lexerName == "css") {
             // Selectors (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Selector color
+            editor->send(SCI_STYLESETFORE, SCE_CSS_TAG, 0x0000FF);  // Selector color
             
             // Properties (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // Property color
+            editor->send(SCI_STYLESETFORE, SCE_CSS_PROPERTY, 0x008000);  // Property color
             
             // Values (brown)
-            editor->send(SCI_STYLESETFORE, 3, 0xA52A2A);  // Value color
+            editor->send(SCI_STYLESETFORE, SCE_CSS_VALUE, 0xA52A2A);  // Value color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, SCE_CSS_COMMENT, 0x808080);  // Comment color
+            
         } else if (lexerName == "bash") {
             // Keywords (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
+            editor->send(SCI_STYLESETFORE, SCE_SH_WORD, 0x0000FF);  // Keyword color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_SH_STRING, 0x008000);  // String color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_SH_COMMENTLINE, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, SCE_SH_NUMBER, 0xA52A2A);  // Number color
+            
+            // Operators
+            editor->send(SCI_STYLESETFORE, SCE_SH_OPERATOR, 0x000000);  // Operator color
+            
+            // Set keywords
+            const char* bashKeywords = "if then else elif fi for while until do done case esac "
+                                       "if then else elif fi for while until do done case esac "
+                                       "function return";
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(bashKeywords));
+            
         } else if (lexerName == "properties") {
             // Keys (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Key color
+            editor->send(SCI_STYLESETFORE, SCE_PROPS_KEY, 0x0000FF);  // Key color
             
             // Values (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // Value color
+            editor->send(SCI_STYLESETFORE, SCE_PROPS_VALUE, 0x008000);  // Value color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, SCE_PROPS_COMMENT, 0x808080);  // Comment color
+            
         } else if (lexerName == "yaml") {
             // Keys (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Key color
+            editor->send(SCI_STYLESETFORE, SCE_YAML_WORD, 0x0000FF);  // Key color
             
             // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_YAML_STRING, 0x008000);  // String color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_YAML_COMMENT, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, SCE_YAML_NUMBER, 0xA52A2A);  // Number color
+            
         } else if (lexerName == "markdown") {
             // Headers (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Header color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER, 0x0000FF);  // Header color
             
             // Links (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // Link color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_LINK, 0x008000);  // Link color
             
             // Code blocks (brown)
-            editor->send(SCI_STYLESETFORE, 3, 0xA52A2A);  // Code color
-        } else if (lexerName == "sql") {
-            // Keywords (blue)
-            editor->send(SCI_STYLESETFORE, 1, 0x0000FF);  // Keyword color
-            
-            // Strings (green)
-            editor->send(SCI_STYLESETFORE, 2, 0x008000);  // String color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_CODE, 0xA52A2A);  // Code color
             
             // Comments (gray)
-            editor->send(SCI_STYLESETFORE, 3, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_COMMENT, 0x808080);  // Comment color
+            
+        } else if (lexerName == "sql") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, SCE_SQL_WORD, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, SCE_SQL_STRING, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, SCE_SQL_COMMENT, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_SQL_COMMENTLINE, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, SCE_SQL_NUMBER, 0xA52A2A);  // Number color
+            
+            // Operators
+            editor->send(SCI_STYLESETFORE, SCE_SQL_OPERATOR, 0x000000);  // Operator color
+            
+            // Set keywords
+            const char* sqlKeywords = "SELECT FROM WHERE GROUP BY HAVING ORDER LIMIT OFFSET "
+                                      "INSERT INTO UPDATE DELETE CREATE TABLE DROP ALTER "
+                                      "INDEX VIEW UNION ALL DISTINCT AS AND OR NOT NULL "
+                                      "INNER JOIN LEFT JOIN RIGHT JOIN FULL OUTER JOIN "
+                                      "PRIMARY KEY FOREIGN KEY REFERENCES UNIQUE CHECK "
+                                      "DEFAULT AUTO_INCREMENT";
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(sqlKeywords));
+            
+        } else if (lexerName == "java") {
+            // Keywords (blue)
+            editor->send(SCI_STYLESETFORE, SCE_C_WORD, 0x0000FF);  // Keyword color
+            
+            // Strings (green)
+            editor->send(SCI_STYLESETFORE, SCE_C_STRING, 0x008000);  // String color
+            
+            // Comments (gray)
+            editor->send(SCI_STYLESETFORE, SCE_C_COMMENT, 0x808080);  // Comment color
+            editor->send(SCI_STYLESETFORE, SCE_C_COMMENTLINE, 0x808080);  // Comment color
+            
+            // Numbers (brown)
+            editor->send(SCI_STYLESETFORE, SCE_C_NUMBER, 0xA52A2A);  // Number color
+            
+            // Operators
+            editor->send(SCI_STYLESETFORE, SCE_C_OPERATOR, 0x000000);  // Operator color
+            
+            // Set keywords
+            const char* javaKeywords = "abstract assert boolean break byte case catch char class "
+                                       "const continue default do double else enum extends final "
+                                       "finally float for goto if implements import instanceOf int "
+                                       "interface long native new package private protected public "
+                                       "return short static strictfp super switch synchronized this "
+                                       "throw throws transient try void volatile while";
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(javaKeywords));
+            
+        } else if (lexerName == "null") {
+            // Default styling for null lexer
+            editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, 0x000000);  // Black text
+            editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, 0xFFFFFF);  // White background
         }
+        
+        // Force recolorization
+        editor->send(SCI_COLOURISE, 0, -1);
     }
 
 signals:
