@@ -162,6 +162,8 @@ private slots:
     void find();
     void showReplaceDialog();
     void toggleWordWrap();
+    void zoomIn();
+    void zoomOut();
 
     // Tab management
     void tabChanged(int index);
@@ -396,8 +398,8 @@ void MainWindow::setupActions() {
 
     // Connect additional toolbar actions (unimplemented)
     connect(printAction, &QAction::triggered, this, []() { /* Not implemented */ });
-    connect(zoomInAction, &QAction::triggered, this, []() { /* Not implemented */ });
-    connect(zoomOutAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(zoomInAction, &QAction::triggered, this, &MainWindow::zoomIn);
+    connect(zoomOutAction, &QAction::triggered, this, &MainWindow::zoomOut);
     connect(wordWrapAction, &QAction::triggered, this, &MainWindow::toggleWordWrap);
     connect(showAllCharactersAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(indentGuideAction, &QAction::triggered, this, []() { /* Not implemented */ });
@@ -498,6 +500,8 @@ void MainWindow::setupActions() {
     selectAllAction->setShortcut(QKeySequence::SelectAll);
     findAction->setShortcut(QKeySequence::Find);
     replaceAction->setShortcut(QKeySequence("Ctrl+H"));
+    zoomInAction->setShortcut(QKeySequence("Ctrl++"));
+    zoomOutAction->setShortcut(QKeySequence("Ctrl+-"));
     
     // Set tooltips for unimplemented actions
     closeAction->setToolTip("Close");
@@ -527,11 +531,11 @@ void MainWindow::setupActions() {
     saveAllAction->setEnabled(true);
     wordWrapAction->setEnabled(true);
     wordWrapAction->setCheckable(true);
+    zoomInAction->setEnabled(true);
+    zoomOutAction->setEnabled(true);
 
     // Disable unimplemented actions
     printAction->setEnabled(false);
-    zoomInAction->setEnabled(false);
-    zoomOutAction->setEnabled(false);
     showAllCharactersAction->setEnabled(false);
     indentGuideAction->setEnabled(false);
     functionListAction->setEnabled(false);
@@ -720,6 +724,26 @@ void MainWindow::toggleWordWrap() {
     
     // Update the action's checked state
     wordWrapAction->setChecked(newWrapMode == SC_WRAP_WORD);
+}
+
+void MainWindow::zoomIn() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Zoom in using Scintilla's native zoom functionality
+    editor->send(SCI_ZOOMIN);
+}
+
+void MainWindow::zoomOut() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Zoom out using Scintilla's native zoom functionality
+    editor->send(SCI_ZOOMOUT);
 }
 
 void MainWindow::tabChanged(int index) {
