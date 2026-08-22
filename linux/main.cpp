@@ -1422,96 +1422,205 @@ void MainWindow::loadSession() {
 }
 
 // Find/Replace functions (restored)
-void MainWindow::findNext()
-{
+void MainWindow::findNext() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
     
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->GetFindText();
+    QString findText = findReplaceDialog->findText();
     
-    if (!findText.isEmpty()) {
-        // Get the current position
-        Sci_Position pos = editor->send(SCI_GETCURRENTPOS);
-        
-        // Find next occurrence
-        Sci_Position foundPos = editor->send(SCI_FINDTEXT, 0, reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-        
-        if (foundPos != -1) {
-            // Select the found text
-            editor->send(SCI_SETSEL, foundPos, foundPos + findText.length());
-        }
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
     }
-}
-
-void MainWindow::findPrevious()
-{
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-    
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->GetFindText();
-    
-    if (!findText.isEmpty()) {
-        // Get the current position
-        Sci_Position pos = editor->send(SCI_GETCURRENTPOS);
-        
-        // Find previous occurrence (search backwards)
-        Sci_Position foundPos = editor->send(SCI_FINDTEXT, SCFIND_BACKWARDS, reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-        
-        if (foundPos != -1) {
-            // Select the found text
-            editor->send(SCI_SETSEL, foundPos, foundPos + findText.length());
-        }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
     }
-}
-
-void MainWindow::replace()
-{
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
     
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->GetFindText();
-    QString replaceText = findReplaceDialog->GetReplaceText();
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
     
-    if (!findText.isEmpty()) {
-        // Get the current position
-        Sci_Position pos = editor->send(SCI_GETCURRENTPOS);
-        
-        // Find next occurrence
-        Sci_Position foundPos = editor->send(SCI_FINDTEXT, 0, reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-        
-        if (foundPos != -1) {
-            // Replace the text
-            editor->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+    // Set target range to search from current position to end of document
+    editor->send(SCI_SETTARGETSTART, currentPos);
+    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+    
+    // Perform search
+    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
+        static_cast<Scintilla::Position>(findText.length()), 
+        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+    
+    if (foundPos != -1) {
+        // Select the match
+        Scintilla::Position endPos = foundPos + findText.length();
+        editor->send(SCI_SETSEL, foundPos, endPos);
+        editor->send(SCI_SCROLLCARET);
+    } else {
+        // Wrap around if enabled
+        if (findReplaceDialog->wrapAround()) {
+            editor->send(SCI_SETTARGETSTART, 0);
+            editor->send(SCI_SETTARGETEND, currentPos);
+            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
             
-            // Select the replacement text
-            editor->send(SCI_SETSEL, foundPos, foundPos + replaceText.length());
+            foundPos = editor->send(SCI_SEARCHINTARGET, 
+                static_cast<Scintilla::Position>(findText.length()), 
+                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+                
+            if (foundPos != -1) {
+                Scintilla::Position endPos = foundPos + findText.length();
+                editor->send(SCI_SETSEL, foundPos, endPos);
+                editor->send(SCI_SCROLLCARET);
+            }
         }
     }
 }
 
-void MainWindow::replaceAll()
-{
+void MainWindow::findPrevious() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
     
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->GetFindText();
-    QString replaceText = findReplaceDialog->GetReplaceText();
+    QString findText = findReplaceDialog->findText();
     
-    if (!findText.isEmpty()) {
-        // Replace all occurrences
-        editor->send(SCI_REPLACETARGET, findText.length(), reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Set target range to search from beginning to current position
+    editor->send(SCI_SETTARGETSTART, 0);
+    editor->send(SCI_SETTARGETEND, currentPos);
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+    
+    // Perform search backwards
+    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET, 
+        static_cast<Scintilla::Position>(findText.length()), 
+        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+    
+    if (foundPos != -1) {
+        // Select the match
+        Scintilla::Position endPos = foundPos + findText.length();
+        editor->send(SCI_SETSEL, foundPos, endPos);
+        editor->send(SCI_SCROLLCARET);
+    } else {
+        // Wrap around if enabled
+        if (findReplaceDialog->wrapAround()) {
+            editor->send(SCI_SETTARGETSTART, currentPos);
+            editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+            
+            foundPos = editor->send(SCI_SEARCHINTARGET, 
+                static_cast<Scintilla::Position>(findText.length()), 
+                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
+                
+            if (foundPos != -1) {
+                Scintilla::Position endPos = foundPos + findText.length();
+                editor->send(SCI_SETSEL, foundPos, endPos);
+                editor->send(SCI_SCROLLCARET);
+            }
+        }
     }
 }
 
-void MainWindow::findReplaceClosed()
-{
-    // Reset the find/replace dialog when it's closed
-    findReplaceDialog->SetFindText("");
-    findReplaceDialog->SetReplaceText("");
+void MainWindow::replace() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    QString replaceText = findReplaceDialog->replaceText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Check if we're at a match
+    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
+    Scintilla::Position selStart = editor->send(SCI_GETSELECTIONSTART);
+    Scintilla::Position selEnd = editor->send(SCI_GETSELECTIONEND);
+    
+    bool isSelectionMatch = (selStart != selEnd) && 
+        (selStart == anchor) &&
+        (selEnd - selStart == static_cast<Scintilla::Position>(findText.length()));
+    
+    if (isSelectionMatch) {
+        // Get the text at current selection
+        char* buffer = new char[findText.length() + 1];
+        editor->send(SCI_GETTEXT, findText.length() + 1, reinterpret_cast<sptr_t>(buffer));
+        QString selectedText(buffer);
+        delete[] buffer;
+        
+        if (selectedText == findText) {
+            // Replace the selection
+            editor->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+            editor->send(SCI_SETSEL, selStart, selStart + replaceText.length());
+            
+            // Continue searching from after replacement
+            findNext();
+        }
+    } else {
+        // Perform search and replace
+        findNext();
+    }
+}
+
+void MainWindow::replaceAll() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    QString findText = findReplaceDialog->findText();
+    QString replaceText = findReplaceDialog->replaceText();
+    
+    if (findText.isEmpty()) return;
+    
+    // Set up search flags
+    int searchFlags = 0;
+    if (findReplaceDialog->matchCase()) {
+        searchFlags |= SCFIND_MATCHCASE;
+    }
+    if (findReplaceDialog->wholeWord()) {
+        searchFlags |= SCFIND_WHOLEWORD;
+    }
+    
+    // Get current position
+    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
+    
+    // Perform search and replace all
+    editor->send(SCI_SETTARGETSTART, 0);
+    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
+    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
+    
+    int result = editor->send(SCI_REPLACETARGET, -1, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
+    
+    // Update status bar
+    updateStatusBar();
+}
+
+void MainWindow::findReplaceClosed() {
+    // No implementation needed for this function
 }
 
 int main(int argc, char *argv[])
