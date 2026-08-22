@@ -84,7 +84,7 @@ target_include_directories(npp_linux PRIVATE
 target_compile_options(npp_linux PRIVATE -include cstdint)
 
 # Define the macro that enables Qt specific code in Scintilla
-target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1 LEXILLA_STATIC=1)
+target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1 LEXILLA_STATIC=1 LINUX_BUILD=1)
 
 target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
 
