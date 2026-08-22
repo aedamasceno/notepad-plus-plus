@@ -161,6 +161,7 @@ private slots:
     void selectAll();
     void find();
     void showReplaceDialog();
+    void toggleWordWrap();
 
     // Tab management
     void tabChanged(int index);
@@ -397,7 +398,7 @@ void MainWindow::setupActions() {
     connect(printAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(zoomInAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(zoomOutAction, &QAction::triggered, this, []() { /* Not implemented */ });
-    connect(wordWrapAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(wordWrapAction, &QAction::triggered, this, &MainWindow::toggleWordWrap);
     connect(showAllCharactersAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(indentGuideAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(functionListAction, &QAction::triggered, this, []() { /* Not implemented */ });
@@ -462,10 +463,11 @@ void MainWindow::setupActions() {
     toolBar->addAction(saveAllAction);
     toolBar->addAction(printAction);
     toolBar->addSeparator();
+    toolBar->addAction(wordWrapAction);
+    toolBar->addSeparator();
     toolBar->addAction(zoomInAction);
     toolBar->addAction(zoomOutAction);
     toolBar->addSeparator();
-    toolBar->addAction(wordWrapAction);
     toolBar->addAction(showAllCharactersAction);
     toolBar->addAction(indentGuideAction);
     toolBar->addSeparator();
@@ -523,12 +525,13 @@ void MainWindow::setupActions() {
     closeAction->setEnabled(true);
     closeAllAction->setEnabled(true);
     saveAllAction->setEnabled(true);
+    wordWrapAction->setEnabled(true);
+    wordWrapAction->setCheckable(true);
 
     // Disable unimplemented actions
     printAction->setEnabled(false);
     zoomInAction->setEnabled(false);
     zoomOutAction->setEnabled(false);
-    wordWrapAction->setEnabled(false);
     showAllCharactersAction->setEnabled(false);
     indentGuideAction->setEnabled(false);
     functionListAction->setEnabled(false);
@@ -700,9 +703,36 @@ void MainWindow::showReplaceDialog() {
     findReplaceDialog->activateWindow();
 }
 
+void MainWindow::toggleWordWrap() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Get current wrap mode
+    int currentWrapMode = editor->send(SCI_GETWRAPMODE);
+    
+    // Toggle wrap mode
+    int newWrapMode = (currentWrapMode == SC_WRAP_WORD) ? SC_WRAP_NONE : SC_WRAP_WORD;
+    
+    // Apply the new wrap mode
+    editor->send(SCI_SETWRAPMODE, newWrapMode);
+    
+    // Update the action's checked state
+    wordWrapAction->setChecked(newWrapMode == SC_WRAP_WORD);
+}
+
 void MainWindow::tabChanged(int index) {
     updateEditActionsEnabled();
     updateStatusBar();
+    
+    // Update word wrap action state to match current tab
+    DocumentTab* currentTab = getCurrentTab();
+    if (currentTab) {
+        ScintillaEditBase* editor = currentTab->getEditor();
+        int wrapMode = editor->send(SCI_GETWRAPMODE);
+        wordWrapAction->setChecked(wrapMode == SC_WRAP_WORD);
+    }
 }
 
 void MainWindow::tabCloseRequested(int index) {
