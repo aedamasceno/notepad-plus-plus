@@ -306,8 +306,7 @@ private:
             // Keywords (blue)
             editor->send(SCI_STYLESETFORE, SCE_JSON_KEYWORD, 0x0000FF);  // Keyword color
             
-            // Comments (gray)
-            editor->send(SCI_STYLESETFORE, SCE_JSON_COMMENT, 0x808080);  // Comment color
+            // Note: No comment styling for JSON in this version
             
         } else if (lexerName == "xml") {
             // Tags (blue)
@@ -371,8 +370,8 @@ private:
             // Keys (blue)
             editor->send(SCI_STYLESETFORE, SCE_PROPS_KEY, 0x0000FF);  // Key color
             
-            // Values (green)
-            editor->send(SCI_STYLESETFORE, SCE_PROPS_VALUE, 0x008000);  // Value color
+            // Values (green) - Note: This version may not have a separate value style
+            editor->send(SCI_STYLESETFORE, SCE_PROPS_KEY, 0x0000FF);  // Use key color for values if no separate style
             
             // Comments (gray)
             editor->send(SCI_STYLESETFORE, SCE_PROPS_COMMENT, 0x808080);  // Comment color
@@ -391,8 +390,13 @@ private:
             editor->send(SCI_STYLESETFORE, SCE_YAML_NUMBER, 0xA52A2A);  // Number color
             
         } else if (lexerName == "markdown") {
-            // Headers (blue)
-            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER, 0x0000FF);  // Header color
+            // Headers (blue) - Using available header styles
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER1, 0x0000FF);  // Header color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER2, 0x0000FF);  // Header color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER3, 0x0000FF);  // Header color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER4, 0x0000FF);  // Header color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER5, 0x0000FF);  // Header color
+            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_HEADER6, 0x0000FF);  // Header color
             
             // Links (green)
             editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_LINK, 0x008000);  // Link color
@@ -400,8 +404,7 @@ private:
             // Code blocks (brown)
             editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_CODE, 0xA52A2A);  // Code color
             
-            // Comments (gray)
-            editor->send(SCI_STYLESETFORE, SCE_MARKDOWN_COMMENT, 0x808080);  // Comment color
+            // Comments (gray) - Note: Markdown may not have comment styling in this version
             
         } else if (lexerName == "sql") {
             // Keywords (blue)
