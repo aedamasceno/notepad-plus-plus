@@ -41,6 +41,20 @@ file(GLOB_RECURSE LEXILLA_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/src/*.cpp"
 )
 
+# Gather Lexilla lexlib sources
+file(GLOB_RECURSE LEXILLA_LEXLIB_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexlib/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexlib/*.cxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexlib/*.cpp"
+)
+
+# Gather Lexilla lexer sources
+file(GLOB_RECURSE LEXILLA_LEXERS_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexers/Lex*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexers/Lex*.cxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lexilla/lexers/Lex*.cpp"
+)
+
 add_executable(npp_linux linux/main.cpp linux/findreplace.cpp linux/sessionmanager.cpp linux/resources.qrc
     ${SCINTILLA_CORE_SOURCES}
     ${QT_EDIT_BASE_SOURCES}
@@ -48,6 +62,8 @@ add_executable(npp_linux linux/main.cpp linux/findreplace.cpp linux/sessionmanag
     ${QT_EDIT_SOURCES}
     ${QT_EDIT_HEADERS}
     ${LEXILLA_SOURCES}
+    ${LEXILLA_LEXLIB_SOURCES}
+    ${LEXILLA_LEXERS_SOURCES}
 )
 
 target_include_directories(npp_linux PRIVATE
