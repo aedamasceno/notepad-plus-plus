@@ -1,45 +1,36 @@
 # 🐧 Notepad++ Native Linux Port
 
-### Experimental native Linux port of Notepad++ using Qt 6 and Scintilla
+# Notepad++ Native Linux Port
 
-> No Wine required.  
-> This project is under active development and is not yet production-ready.
+> Experimental native Linux port of Notepad++ using Qt 6, Scintilla, and Lexilla.
 
-## Why This Exists
+This project aims to bring the familiar Notepad++ editing experience to Linux
+without requiring Wine.
 
-As a longtime Notepad++ user and now a full-time Linux user, I was surprised that I couldn't find a native Linux editor that gave me everything I had grown accustomed to in Notepad++. I tried several alternatives, but there was always a feature missing or something that simply didn't work the way I was used to.
+**Current status: Alpha / Work in Progress**
 
-Since Notepad++ is open source, I decided to take on the challenge of porting it to Linux myself.
+This is an independent porting effort based on the open-source Notepad++ code.
+Notepad++ itself and the original source code are the work of the Notepad++
+project and its contributors.
 
-I want to be clear about credit: **Notepad++ and the work that makes this project possible belong to its original creators and contributors.** I did not create Notepad++. My goal is simply to bring the Notepad++ experience I know and love to Linux natively.
+## Current Features
 
-## Current Status
-
-Working today:
-
-- Native Qt 6 application
+- Native Linux executable
+- Qt 6 interface
 - Scintilla editor
-- Multiple document tabs
-- New / Open / Save
-- Undo / Redo
-- Cut / Copy / Paste
+- Lexilla syntax highlighting
+- Multiple tabs
+- Persistent unsaved notes
+- Crash/restart recovery
+- Open / Save / Save As / Save All
 - Find / Replace
-- Dirty-state tracking
-- Tab close buttons
-- Status bar
-- Native Notepad++ toolbar icons
-
-Still in progress:
-
-- Remaining toolbar actions
-- Advanced search
-- Syntax highlighting integration
-- Preferences
-- Sessions
-- Printing
-- Dark mode
-- Plugins
-- Linux packaging and desktop integration
+- Line numbers
+- Word Wrap
+- Zoom In / Zoom Out
+- Show All Characters
+- Indent Guides
+- Notepad++ toolbar icons
+- Fedora RPM package
 
 ## Build
 
