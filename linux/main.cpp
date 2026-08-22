@@ -189,6 +189,7 @@ private slots:
     void zoomIn();
     void zoomOut();
     void showAllCharacters();
+    void indentGuides();
 
     // Tab management
     void tabChanged(int index);
@@ -427,7 +428,7 @@ void MainWindow::setupActions() {
     connect(zoomOutAction, &QAction::triggered, this, &MainWindow::zoomOut);
     connect(wordWrapAction, &QAction::triggered, this, &MainWindow::toggleWordWrap);
     connect(showAllCharactersAction, &QAction::triggered, this, &MainWindow::showAllCharacters);
-    connect(indentGuideAction, &QAction::triggered, this, []() { /* Not implemented */ });
+    connect(indentGuideAction, &QAction::triggered, this, &MainWindow::indentGuides);
     connect(functionListAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(documentMapAction, &QAction::triggered, this, []() { /* Not implemented */ });
     connect(fileBrowserAction, &QAction::triggered, this, []() { /* Not implemented */ });
@@ -561,10 +562,11 @@ void MainWindow::setupActions() {
     zoomOutAction->setEnabled(true);
     showAllCharactersAction->setEnabled(true);
     showAllCharactersAction->setCheckable(true);
+    indentGuideAction->setEnabled(true);
+    indentGuideAction->setCheckable(true);
 
     // Disable unimplemented actions
     printAction->setEnabled(false);
-    indentGuideAction->setEnabled(false);
     functionListAction->setEnabled(false);
     documentMapAction->setEnabled(false);
     fileBrowserAction->setEnabled(false);
@@ -798,6 +800,26 @@ void MainWindow::showAllCharacters() {
     showAllCharactersAction->setChecked(!isCurrentlyVisible);
 }
 
+void MainWindow::indentGuides() {
+    DocumentTab* currentTab = getCurrentTab();
+    if (!currentTab) return;
+    
+    ScintillaEditBase* editor = currentTab->getEditor();
+    
+    // Get current state
+    int currentIndentGuides = editor->send(SCI_GETINDENTATIONGUIDES);
+    bool isCurrentlyVisible = (currentIndentGuides == SC_IV_LOOKFORWARD);
+    
+    // Toggle the visibility
+    int newIndentGuides = isCurrentlyVisible ? SC_IV_NONE : SC_IV_LOOKFORWARD;
+    
+    // Apply the new setting
+    editor->send(SCI_SETINDENTATIONGUIDES, newIndentGuides);
+    
+    // Update the action's checked state
+    indentGuideAction->setChecked(!isCurrentlyVisible);
+}
+
 void MainWindow::tabChanged(int index) {
     updateEditActionsEnabled();
     updateStatusBar();
@@ -814,6 +836,11 @@ void MainWindow::tabChanged(int index) {
         bool isWSVisible = (viewWS == SCWS_VISIBLEALWAYS);
         bool viewEOL = editor->send(SCI_GETVIEWEOL);
         showAllCharactersAction->setChecked(isWSVisible || viewEOL);
+        
+        // Update indent guide action state to match current tab
+        int indentGuides = editor->send(SCI_GETINDENTATIONGUIDES);
+        bool isIndentGuideVisible = (indentGuides == SC_IV_LOOKFORWARD);
+        indentGuideAction->setChecked(isIndentGuideVisible);
     }
 }
 
