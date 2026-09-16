@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(npp_linux LANGUAGES CXX)
 
-find_package(Qt6 COMPONENTS Widgets Core5Compat REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Core5Compat PrintSupport REQUIRED)
 
 # Enable Qt meta‑object compilation
 set(CMAKE_AUTOMOC ON)
@@ -59,7 +59,17 @@ file(GLOB_RECURSE LEXILLA_LEXERS_SOURCES
 # Filter out Windows-specific lexer files
 list(FILTER LEXILLA_LEXERS_SOURCES EXCLUDE REGEX "LexUser\\.cxx$")
 
-add_executable(npp_linux linux/main.cpp linux/findreplace.cpp linux/sessionmanager.cpp linux/resources.qrc
+add_executable(npp_linux
+    linux/main.cpp
+    linux/findreplace.cpp
+    linux/sessionmanager.cpp
+    linux/functionlist.cpp
+    linux/functionlist.h
+    linux/filebrowser.cpp
+    linux/filebrowser.h
+    linux/documentlist.cpp
+    linux/documentlist.h
+    linux/resources.qrc
     ${SCINTILLA_CORE_SOURCES}
     ${QT_EDIT_BASE_SOURCES}
     ${QT_EDIT_BASE_HEADERS}
@@ -86,7 +96,7 @@ target_compile_options(npp_linux PRIVATE -include cstdint)
 # Define the macro that enables Qt specific code in Scintilla
 target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT MAKING_LIBRARY=1 LEXILLA_STATIC=1 LINUX_BUILD=1)
 
-target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
+target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport)
 
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD 17)
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD_REQUIRED ON)

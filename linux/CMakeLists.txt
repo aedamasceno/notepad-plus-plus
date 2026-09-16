@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(npp_linux LANGUAGES CXX)
 
-find_package(Qt6 COMPONENTS Widgets Core5Compat REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Core5Compat PrintSupport REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # Enable Qt meta‑object compilation
@@ -92,6 +92,12 @@ add_executable(npp_linux
     main.cpp
     findreplace.cpp
     sessionmanager.cpp
+    functionlist.cpp
+    functionlist.h
+    filebrowser.cpp
+    filebrowser.h
+    documentlist.cpp
+    documentlist.h
     resources.qrc
 
     ${LEXILLA_CORE_SOURCES}
@@ -119,7 +125,10 @@ target_include_directories(npp_linux PRIVATE
 # Define the macro that enables Qt specific code in Scintilla
 target_compile_definitions(npp_linux PRIVATE SCINTILLA_QT)
 
-target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat)
+target_link_libraries(npp_linux PRIVATE Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport)
 
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD 17)
 set_property(TARGET npp_linux PROPERTY CXX_STANDARD_REQUIRED ON)
+
+# Qt printing support
+target_link_libraries(npp_linux PRIVATE Qt6::PrintSupport)
