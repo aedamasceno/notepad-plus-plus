@@ -71,7 +71,32 @@ set_source_files_properties(
 )
 
 # ------------------------------------------------------------------
-add_executable(npp_linux main.cpp findreplace.cpp
+# Lexilla
+file(GLOB LEXILLA_CORE_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lexilla/src/*.cxx"
+)
+
+file(GLOB LEXILLA_LEXLIB_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lexilla/lexlib/*.cxx"
+)
+
+file(GLOB LEXILLA_LEXER_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lexilla/lexers/*.cxx"
+)
+
+# Notepad++ User Defined Language lexer is Windows-specific.
+list(FILTER LEXILLA_LEXER_SOURCES EXCLUDE REGEX ".*/LexUser\\.cxx$")
+
+# ------------------------------------------------------------------
+add_executable(npp_linux
+    main.cpp
+    findreplace.cpp
+    sessionmanager.cpp
+    resources.qrc
+
+    ${LEXILLA_CORE_SOURCES}
+    ${LEXILLA_LEXLIB_SOURCES}
+    ${LEXILLA_LEXER_SOURCES}
     ${SCINTILLA_CORE_SOURCES}
     ${QT_EDIT_BASE_SOURCES}
     ${QT_EDIT_BASE_HEADERS}
@@ -82,6 +107,9 @@ add_executable(npp_linux main.cpp findreplace.cpp
 )
 
 target_include_directories(npp_linux PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lexilla/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lexilla/lexlib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lexilla/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/../scintilla/qt/ScintillaEditBase"
