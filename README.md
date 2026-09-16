@@ -10,6 +10,10 @@ An unofficial native Linux port of **Notepad++** using **Qt 6**, **Scintilla**, 
 
 This is an independent porting effort based on the open-source Notepad++ project. Notepad++ itself and the original source code are the work of the Notepad++ project and its contributors.
 
+## Screenshot
+
+![Notepad++ Native Linux Port](docs/images/notepad-plus-plus-linux.png)
+
 ## Why This Project Exists
 
 I am a longtime Notepad++ user who moved to Linux full time. I wanted the familiar Notepad++ workflow without running the Windows application through Wine, so I started porting the existing project to a native Linux application.
