@@ -158,6 +158,31 @@ void testSessionRoundTripAndConflictDiagnostics()
            "external change does not replace recovered dirty content");
 }
 
+void testDirtySnapshotReactivationKeepsLatestBytes()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    const QString id = QStringLiteral("reactivated-id");
+    const QByteArray latest = QStringLiteral("latest exact bytes 雪\0tail").toUtf8();
+
+    SessionManager writer(nullptr, sessionDir, 20);
+    writer.loadSession();
+    writer.updateDocument({id, {}, 1, true}, "first dirty bytes");
+    writer.flush();
+    writer.updateDocument({id, {}, 1, false}, {});
+    writer.updateDocument({id, {}, 1, true}, latest);
+    writer.flush();
+
+    SessionManager reader(nullptr, sessionDir, 20);
+    reader.loadSession();
+    expect(reader.documents().size() == 1 && reader.documents().first().dirty,
+           "reactivated dirty document survives restart");
+    expect(reader.documents().value(0).recoveryState == RecoveryState::Ready,
+           "reactivated snapshot still exists after metadata commit cleanup");
+    expect(reader.readRecoveryContent(reader.documents().value(0)) == latest,
+           "reactivated snapshot restores latest exact bytes");
+}
+
 void testMalformedMetadataMissingBackupAndOrphanPreservation()
 {
     QTemporaryDir root;
@@ -509,6 +534,7 @@ int main(int argc, char **argv)
         return app.exec();
     }
     testSessionRoundTripAndConflictDiagnostics();
+    testDirtySnapshotReactivationKeepsLatestBytes();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
     testUnmanagedSnapshotPathCannotDeleteFiles();
     testLegacyMigrationKeepsSourceAndDeduplicates();

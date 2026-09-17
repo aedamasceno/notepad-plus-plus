@@ -201,6 +201,7 @@ void SessionManager::updateDocument(const DocumentCheckpoint &checkpoint, const 
     document.recoveryState = RecoveryState::Ready;
     if (document.dirty) {
         document.snapshotPath = relativeSnapshotPath(document.id);
+        m_obsoleteSnapshots.removeAll(absoluteSnapshotPath(document));
         m_pendingSnapshots.insert(document.id, content);
     } else {
         m_pendingSnapshots.remove(document.id);
@@ -388,8 +389,18 @@ void SessionManager::writeCheckpoint()
         return;
     }
     m_metadataDirty = false;
+    QSet<QString> referencedSnapshots;
+    for (const RecoveryDocument &document : std::as_const(m_documents)) {
+        const QString path = absoluteSnapshotPath(document);
+        if (!path.isEmpty())
+            referencedSnapshots.insert(path);
+    }
     const QStringList obsolete = m_obsoleteSnapshots;
     for (const QString &path : obsolete) {
+        if (referencedSnapshots.contains(path)) {
+            m_obsoleteSnapshots.removeAll(path);
+            continue;
+        }
         if (!QFileInfo::exists(path) || QFile::remove(path))
             m_obsoleteSnapshots.removeAll(path);
         else
