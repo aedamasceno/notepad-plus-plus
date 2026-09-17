@@ -1,49 +1,42 @@
 #include "documentlist.h"
-#include <QListWidget>
-#include <QListWidgetItem>
-#include <QVBoxLayout>
-#include <QDebug>
+
+#include <QFileInfo>
+#include <QSignalBlocker>
 
 DocumentList::DocumentList(QWidget *parent)
-    : QDockWidget("Document List", parent)
+    : QDockWidget(tr("Document List"), parent), m_list(new QListWidget(this))
 {
-    documentListWidget = new QListWidget(this);
-    
-    connect(documentListWidget, &QListWidget::itemClicked,
-            this, &DocumentList::onItemClicked);
-    
-    setWidget(documentListWidget);
-    updateDocumentList(); // Initial load
+    setObjectName(QStringLiteral("DocumentListDock"));
+    m_list->setObjectName(QStringLiteral("DocumentListView"));
+    setWidget(m_list);
+    connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
+        emit documentActivated(item->data(Qt::UserRole).toInt());
+    });
+    connect(m_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+        emit documentActivated(item->data(Qt::UserRole).toInt());
+    });
 }
 
-DocumentList::~DocumentList()
+void DocumentList::setDocuments(const QVector<DocumentListEntry> &documents, int activeIndex)
 {
-}
-
-void DocumentList::updateDocumentList()
-{
-    documentListWidget->clear();
-    // This would be populated with actual open documents in real implementation
-    QListWidgetItem *item = new QListWidgetItem("example.txt");
-    item->setData(Qt::UserRole, "example.txt");
-    documentListWidget->addItem(item);
-    
-    QListWidgetItem *item2 = new QListWidgetItem("main.cpp"); 
-    item2->setData(Qt::UserRole, "main.cpp");
-    documentListWidget->addItem(item2);
+    const QSignalBlocker blocker(m_list);
+    m_list->clear();
+    for (int index = 0; index < documents.size(); ++index) {
+        const auto &document = documents.at(index);
+        QString label = document.displayName;
+        if (document.dirty)
+            label += QLatin1Char('*');
+        auto *item = new QListWidgetItem(label, m_list);
+        item->setData(Qt::UserRole, index);
+        item->setToolTip(document.filePath.isEmpty() ? tr("Unsaved document") : document.filePath);
+    }
+    setActiveDocument(activeIndex);
 }
 
 void DocumentList::setActiveDocument(int index)
 {
-    if (index >= 0 && index < documentListWidget->count())
-    {
-        documentListWidget->setCurrentRow(index);
-    }
-}
-
-void DocumentList::onItemClicked(QListWidgetItem *item)
-{
-    QString filename = item->data(Qt::UserRole).toString();
-    qDebug() << "Switching to document:" << filename;
-    // Would switch to the selected document in real implementation
+    if (index >= 0 && index < m_list->count())
+        m_list->setCurrentRow(index);
+    else
+        m_list->setCurrentItem(nullptr);
 }

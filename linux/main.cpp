@@ -24,9 +24,17 @@
 #include <QKeySequence>
 #include <QIcon>
 #include <QTimer>
+#include <QSettings>
+#include <QDir>
+#include <QByteArray>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
 #include "sessionmanager.h"
+#include "functionlist.h"
+#include "documentlist.h"
+#include "filebrowser.h"
+#include "documentmap.h"
+#include "editorutils.h"
 
 // Include Scintilla ILexer header before Lexilla.h
 #include "ILexer.h"
@@ -507,7 +515,17 @@ public:
         connect(findReplaceDialog, &FindReplaceDialog::replace, this, &MainWindow::replace);
         connect(findReplaceDialog, &FindReplaceDialog::replaceAll, this, &MainWindow::replaceAll);
         connect(findReplaceDialog, &FindReplaceDialog::closed, this, &MainWindow::findReplaceClosed);
+
+        QSettings settings;
+        restoreGeometry(settings.value(QStringLiteral("mainWindow/geometry")).toByteArray());
+        restoreState(settings.value(QStringLiteral("mainWindow/state")).toByteArray());
+        fileBrowserWidget->setRootPath(
+            settings.value(QStringLiteral("fileBrowser/root"), QDir::homePath()).toString());
+        refreshPanels();
     }
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
 
 private slots:
     // File actions
@@ -568,12 +586,15 @@ private:
     void updateWindowTitle();
     bool loadFile(const QString &filePath);
     bool saveFileToPath(const QString &filePath, DocumentTab* tab = nullptr);
+    bool saveTab(DocumentTab *tab, bool forceSaveAs = false);
     void createNewTab(const QString& filePath = "");
     int findTabIndexForFilePath(const QString& filePath);
-    bool closeTab(int index);
+    bool closeTab(int index, bool ensureOneTab = true);
     bool closeAllTabs();
     DocumentTab* getCurrentTab() const;
     void updateEditActionsEnabled();
+    void refreshPanels();
+    void navigateToLine(int line);
 
     // Session management
     void saveSession();
@@ -647,6 +668,12 @@ private:
 
     // Session manager
     SessionManager* m_sessionManager;
+
+    // Dock widgets for panels (newly added)
+    FunctionList* functionListWidget = nullptr;
+    DocumentMap* documentMapWidget = nullptr;
+    FileBrowser* fileBrowserWidget = nullptr;
+    DocumentList* documentListWidget = nullptr;
 };
 
 void MainWindow::setupUI() {
@@ -706,7 +733,35 @@ void MainWindow::setupUI() {
 
     // Create toolbar container and store it as member
     toolBar = addToolBar("Main Toolbar");
+    toolBar->setObjectName(QStringLiteral("MainToolBar"));
     toolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
+    functionListWidget = new FunctionList(this);
+    documentMapWidget = new DocumentMap(this);
+    fileBrowserWidget = new FileBrowser(this);
+    documentListWidget = new DocumentList(this);
+    addDockWidget(Qt::LeftDockWidgetArea, functionListWidget);
+    addDockWidget(Qt::LeftDockWidgetArea, fileBrowserWidget);
+    addDockWidget(Qt::RightDockWidgetArea, documentMapWidget);
+    addDockWidget(Qt::RightDockWidgetArea, documentListWidget);
+    functionListWidget->hide();
+    documentMapWidget->hide();
+    fileBrowserWidget->hide();
+    documentListWidget->hide();
+
+    connect(documentListWidget, &DocumentList::documentActivated,
+            tabWidget, &QTabWidget::setCurrentIndex);
+    connect(functionListWidget, &FunctionList::lineActivated,
+            this, &MainWindow::navigateToLine);
+    connect(documentMapWidget, &DocumentMap::lineActivated,
+            this, &MainWindow::navigateToLine);
+    connect(fileBrowserWidget, &FileBrowser::fileActivated, this, [this](const QString &path) {
+        const int existing = findTabIndexForFilePath(path);
+        if (existing >= 0)
+            tabWidget->setCurrentIndex(existing);
+        else
+            createNewTab(path);
+    });
 }
 
 void MainWindow::setupActions() {
@@ -920,10 +975,20 @@ void MainWindow::setupActions() {
 
     // Disable unimplemented actions
     printAction->setEnabled(false);
-    functionListAction->setEnabled(false);
-    documentMapAction->setEnabled(false);
-    fileBrowserAction->setEnabled(false);
-    documentListAction->setEnabled(false);
+    for (QAction *panelAction : {functionListAction, documentMapAction,
+                                 fileBrowserAction, documentListAction}) {
+        panelAction->setEnabled(true);
+        panelAction->setCheckable(true);
+        viewMenu->addAction(panelAction);
+    }
+    connect(functionListWidget, &QDockWidget::visibilityChanged,
+            functionListAction, &QAction::setChecked);
+    connect(documentMapWidget, &QDockWidget::visibilityChanged,
+            documentMapAction, &QAction::setChecked);
+    connect(fileBrowserWidget, &QDockWidget::visibilityChanged,
+            fileBrowserAction, &QAction::setChecked);
+    connect(documentListWidget, &QDockWidget::visibilityChanged,
+            documentListAction, &QAction::setChecked);
     startMacroRecordingAction->setEnabled(false);
     stopMacroRecordingAction->setEnabled(false);
     playMacroAction->setEnabled(false);
@@ -987,40 +1052,19 @@ void MainWindow::openFile() {
 
 void MainWindow::saveFile() {
     DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-
-    if (currentTab->getFilePath().isEmpty()) {
-        saveAsFile();
-    } else {
-        saveFileToPath(currentTab->getFilePath());
-    }
+    if (currentTab)
+        saveTab(currentTab);
 }
 
 void MainWindow::saveAsFile() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
 
-    QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "All Files (*)");
-    if (!fileName.isEmpty()) {
-        if (saveFileToPath(fileName)) {
-            currentTab->setFilePath(fileName);
-            currentTab->setDirty(false);
-
-            // Remove from session manager since it's now a normal file
-            if (m_sessionManager) {
-                m_sessionManager->removeUntitledDocument(currentTab->getTabNumber());
-            }
-        }
-    }
+    saveTab(currentTab, true);
 }
 
 void MainWindow::exitApp() {
-    // Save session before closing
-    saveSession();
-
-    if (closeAllTabs()) {
-        close();
-    }
+    close();
 }
 
 void MainWindow::undo() {
@@ -1174,8 +1218,10 @@ void MainWindow::indentGuides() {
 }
 
 void MainWindow::tabChanged(int index) {
+    Q_UNUSED(index)
     updateEditActionsEnabled();
     updateStatusBar();
+    refreshPanels();
 
     // Update word wrap action state to match current tab
     DocumentTab* currentTab = getCurrentTab();
@@ -1198,42 +1244,6 @@ void MainWindow::tabChanged(int index) {
 }
 
 void MainWindow::tabCloseRequested(int index) {
-    DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(index));
-    if (tab) {
-        // If it's an untitled document and modified, ask user
-        if (tab->getFilePath().isEmpty() && tab->isDirty()) {
-            QMessageBox msgBox(this);
-            msgBox.setWindowTitle("Close Tab");
-            msgBox.setText("The document has been modified.");
-            msgBox.setInformativeText("Do you want to save your changes?");
-            msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
-            msgBox.setDefaultButton(QMessageBox::Save);
-
-            int ret = msgBox.exec();
-            switch (ret) {
-                case QMessageBox::Save:
-                    // Save and close
-                    if (!saveFileToPath(tab->getFilePath())) {
-                        return; // Cancel closing if save failed
-                    }
-                    break;
-                case QMessageBox::Discard:
-                    // Just close, remove from session manager
-                    if (m_sessionManager) {
-                        m_sessionManager->removeUntitledDocument(tab->getTabNumber());
-                    }
-                    break;
-                case QMessageBox::Cancel:
-                    return; // Cancel closing
-            }
-        } else if (tab->getFilePath().isEmpty()) {
-            // Untitled document, just remove from session manager
-            if (m_sessionManager) {
-                m_sessionManager->removeUntitledDocument(tab->getTabNumber());
-            }
-        }
-    }
-
     closeTab(index);
 }
 
@@ -1257,6 +1267,7 @@ void MainWindow::documentTitleChanged() {
         }
     }
     updateStatusBar();
+    refreshPanels();
 }
 
 void MainWindow::updateStatusBar() {
@@ -1321,6 +1332,16 @@ void MainWindow::createNewTab(const QString& filePath) {
 
     // Connect editor signals for status bar updates
     connect(newTab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
+    connect(newTab->getEditor(), &ScintillaEditBase::notify, this,
+            [this, newTab](Scintilla::NotificationData *) {
+                if (newTab == getCurrentTab())
+                    refreshPanels();
+            });
+    connect(newTab->getEditor(), &ScintillaEditBase::verticalScrolled, this,
+            [this, newTab](int) {
+                if (newTab == getCurrentTab())
+                    refreshPanels();
+            });
 
     QString title;
     if (filePath.isEmpty()) {
@@ -1343,6 +1364,12 @@ void MainWindow::createNewTab(const QString& filePath) {
     int index = tabWidget->addTab(newTab, title);
     tabWidget->setCurrentIndex(index);
 
+    if (!filePath.isEmpty() && !loadFile(filePath)) {
+        tabWidget->removeTab(index);
+        newTab->deleteLater();
+        return;
+    }
+
     // Update tab text to include asterisk if needed
     documentTitleChanged();
 
@@ -1360,7 +1387,7 @@ int MainWindow::findTabIndexForFilePath(const QString& filePath) {
     return -1;
 }
 
-bool MainWindow::closeTab(int index) {
+bool MainWindow::closeTab(int index, bool ensureOneTab) {
     DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(index));
     if (!tab) return false;
 
@@ -1376,7 +1403,7 @@ bool MainWindow::closeTab(int index) {
         int ret = msgBox.exec();
         switch (ret) {
             case QMessageBox::Save:
-                if (!saveFileToPath(tab->getFilePath())) {
+                if (!saveTab(tab)) {
                     return false; // Save failed, cancel closing
                 }
                 break;
@@ -1387,10 +1414,13 @@ bool MainWindow::closeTab(int index) {
         }
     }
 
+    if (tab->getFilePath().isEmpty() && m_sessionManager)
+        m_sessionManager->removeUntitledDocument(tab->getTabNumber());
     tabWidget->removeTab(index);
+    tab->deleteLater();
 
     // Ensure at least one tab remains
-    if (tabWidget->count() == 0) {
+    if (ensureOneTab && tabWidget->count() == 0) {
         createNewTab();
     }
 
@@ -1400,7 +1430,7 @@ bool MainWindow::closeTab(int index) {
 bool MainWindow::closeAllTabs() {
     // Check all tabs for unsaved changes
     for (int i = tabWidget->count() - 1; i >= 0; --i) {
-        if (!closeTab(i)) {
+        if (!closeTab(i, false)) {
             return false; // Cancelled by user
         }
     }
@@ -1431,14 +1461,14 @@ bool MainWindow::loadFile(const QString &filePath) {
         return false;
     }
 
-    QTextStream in(&file);
-    QString content = in.readAll();
+    const QByteArray content = file.readAll();
     file.close();
 
     DocumentTab* currentTab = getCurrentTab();
     if (currentTab) {
         currentTab->getEditor()->send(SCI_CLEARALL);
-        currentTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.toStdString().c_str()));
+        currentTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.constData()));
+        currentTab->getEditor()->send(SCI_SETSAVEPOINT);
         currentTab->setFilePath(filePath);
         currentTab->setDirty(false);
     }
@@ -1457,29 +1487,34 @@ bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab) {
 
     if (!tab) return false;
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(this, "Error", "Could not open file for writing.");
+    QString error;
+    if (!EditorUtils::writeToFile(tab->getEditor(), filePath, &error)) {
+        QMessageBox::warning(this, tr("Error"),
+                             tr("Could not save %1: %2").arg(filePath, error));
         return false;
     }
+    tab->getEditor()->send(SCI_SETSAVEPOINT);
+    tab->setDirty(false);
+    return true;
+}
 
-    // Get text from Scintilla editor
-    Scintilla::Position length = tab->getEditor()->send(SCI_GETTEXTLENGTH);
-    if (length > 0) {
-        char* buffer = new char[length + 1];
-        tab->getEditor()->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
-        QString content(buffer);
-        delete[] buffer;
-
-        QTextStream out(&file);
-        out << content;
-    } else {
-        // File is empty
-        QTextStream out(&file);
-        out << "";
+bool MainWindow::saveTab(DocumentTab *tab, bool forceSaveAs)
+{
+    if (!tab)
+        return false;
+    QString destination = tab->getFilePath();
+    if (forceSaveAs || destination.isEmpty()) {
+        destination = QFileDialog::getSaveFileName(
+            this, tr("Save File"), destination, tr("All Files (*)"));
+        if (destination.isEmpty())
+            return false;
     }
-    file.close();
-
+    if (!saveFileToPath(destination, tab))
+        return false;
+    if (tab->getFilePath().isEmpty() && m_sessionManager)
+        m_sessionManager->removeUntitledDocument(tab->getTabNumber());
+    tab->setFilePath(destination);
+    refreshPanels();
     return true;
 }
 
@@ -1743,32 +1778,20 @@ void MainWindow::replaceAll() {
     if (!currentTab) return;
 
     ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-    QString replaceText = findReplaceDialog->replaceText();
+    const QByteArray findText = findReplaceDialog->findText().toUtf8();
+    const QByteArray replaceText = findReplaceDialog->replaceText().toUtf8();
 
     if (findText.isEmpty()) return;
 
-    // Set up search flags
     int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
+    if (findReplaceDialog->matchCase())
         searchFlags |= SCFIND_MATCHCASE;
-    }
-    if (findReplaceDialog->wholeWord()) {
+    if (findReplaceDialog->wholeWord())
         searchFlags |= SCFIND_WHOLEWORD;
-    }
 
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-
-    // Perform search and replace all
-    editor->send(SCI_SETTARGETSTART, 0);
-    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
-    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-
-    int result = editor->send(SCI_REPLACETARGET, -1, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
-
-    // Update status bar
+    EditorUtils::replaceAll(editor, findText, replaceText, searchFlags);
     updateStatusBar();
+    refreshPanels();
 }
 
 void MainWindow::printFile() {
@@ -1803,39 +1826,25 @@ void MainWindow::printFile() {
 }
 
 void MainWindow::functionList() {
-    // Show that we're properly handling function list functionality  
-    QMessageBox msg(this);
-    msg.setWindowTitle("Function List");
-    msg.setText("Function list panel initialized (would show dockable function listing panel)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    functionListWidget->setVisible(functionListAction->isChecked());
+    if (functionListWidget->isVisible())
+        refreshPanels();
 }
 
 void MainWindow::documentMap() {
-    // Show that we're properly handling document map functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Document Map");
-    msg.setText("Document map panel initialized (would show dockable minimap panel)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    documentMapWidget->setVisible(documentMapAction->isChecked());
+    if (documentMapWidget->isVisible())
+        refreshPanels();
 }
 
 void MainWindow::fileBrowser() {
-    // Show that we're properly handling file browser functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("File Browser");
-    msg.setText("File browser panel initialized (would show dockable filesystem browser)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    fileBrowserWidget->setVisible(fileBrowserAction->isChecked());
 }
 
 void MainWindow::documentList() {
-    // Show that we're properly handling document list functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Document List");
-    msg.setText("Document list panel initialized (would show open documents tab list)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    documentListWidget->setVisible(documentListAction->isChecked());
+    if (documentListWidget->isVisible())
+        refreshPanels();
 }
 
 void MainWindow::startMacroRecording() {
@@ -1901,6 +1910,59 @@ void MainWindow::syncHorizontal() {
     msg.exec();
 }
 
+void MainWindow::refreshPanels()
+{
+    QVector<DocumentListEntry> documents;
+    documents.reserve(tabWidget->count());
+    for (int index = 0; index < tabWidget->count(); ++index) {
+        auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(index));
+        if (!tab)
+            continue;
+        const QString name = tab->getFilePath().isEmpty()
+            ? QStringLiteral("new %1").arg(tab->getTabNumber())
+            : QFileInfo(tab->getFilePath()).fileName();
+        documents.push_back({name, tab->getFilePath(), tab->isDirty()});
+    }
+    documentListWidget->setDocuments(documents, tabWidget->currentIndex());
+
+    DocumentTab *tab = getCurrentTab();
+    if (!tab) {
+        functionListWidget->setDocument({}, {});
+        documentMapWidget->setDocument({}, 0, 1);
+        return;
+    }
+    ScintillaEditBase *editor = tab->getEditor();
+    const QString content = QString::fromUtf8(EditorUtils::text(editor));
+    const int firstLine = editor->send(SCI_GETFIRSTVISIBLELINE);
+    const int visibleLines = editor->send(SCI_LINESONSCREEN);
+    functionListWidget->setDocument(content, tab->getFilePath());
+    documentMapWidget->setDocument(content, firstLine, visibleLines);
+}
+
+void MainWindow::navigateToLine(int line)
+{
+    DocumentTab *tab = getCurrentTab();
+    if (!tab)
+        return;
+    tab->getEditor()->send(SCI_GOTOLINE, qMax(0, line));
+    tab->getEditor()->send(SCI_SCROLLCARET);
+    refreshPanels();
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (!closeAllTabs()) {
+        event->ignore();
+        return;
+    }
+    saveSession();
+    QSettings settings;
+    settings.setValue(QStringLiteral("mainWindow/geometry"), saveGeometry());
+    settings.setValue(QStringLiteral("mainWindow/state"), saveState());
+    settings.setValue(QStringLiteral("fileBrowser/root"), fileBrowserWidget->rootPath());
+    event->accept();
+}
+
 void MainWindow::findReplaceClosed() {
     // No implementation needed for this function
 }
@@ -1908,6 +1970,8 @@ void MainWindow::findReplaceClosed() {
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("Notepad++"));
+    QCoreApplication::setApplicationName(QStringLiteral("Notepad++ Linux"));
 
     MainWindow window;
     window.show();

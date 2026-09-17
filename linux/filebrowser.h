@@ -3,25 +3,23 @@
 #include <QDockWidget>
 #include <QFileSystemModel>
 #include <QTreeView>
-#include <QVBoxLayout>
-#include <QDir>
-#include <QFileInfo>
 
 class FileBrowser : public QDockWidget
 {
     Q_OBJECT
-
 public:
     explicit FileBrowser(QWidget *parent = nullptr);
-    ~FileBrowser();
+    bool setRootPath(const QString &path);
+    QString rootPath() const { return m_rootPath; }
 
-    void setRootPath(const QString& path);
-    
-private slots:
-    void onItemDoubleClicked(const QModelIndex &index);
-    
+signals:
+    void fileActivated(const QString &filePath);
+    void rootPathChanged(const QString &rootPath);
+
 private:
-    QFileSystemModel *fileSystemModel;
-    QTreeView *fileTreeView;
-    QString currentPath;
+    void chooseRoot();
+    void activateItem(const QModelIndex &index);
+    QFileSystemModel *m_model;
+    QTreeView *m_tree;
+    QString m_rootPath;
 };

@@ -1,55 +1,70 @@
 #include "filebrowser.h"
-#include <QFileSystemModel>
-#include <QTreeView>
-#include <QVBoxLayout>
+
 #include <QDir>
-#include <QDebug>
 #include <QFileDialog>
-#include <QMessageBox>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QVBoxLayout>
 
 FileBrowser::FileBrowser(QWidget *parent)
-    : QDockWidget("File Browser", parent)
+    : QDockWidget(tr("File Browser"), parent),
+      m_model(new QFileSystemModel(this)), m_tree(new QTreeView(this))
 {
-    fileSystemModel = new QFileSystemModel(this);
-    fileSystemModel->setRootPath(QDir::rootPath());
-    
-    fileTreeView = new QTreeView(this);
-    fileTreeView->setModel(fileSystemModel);
-    fileTreeView->setRootIndex(fileSystemModel->index(QDir::rootPath()));
-    
-    // Connect double-click to open files
-    connect(fileTreeView, &QTreeView::doubleClicked,
-            this, &FileBrowser::onItemDoubleClicked);
-    
-    QWidget *widget = new QWidget(this);
-    QVBoxLayout *layout = new QVBoxLayout(widget);
-    layout->addWidget(fileTreeView);
-    setWidget(widget);
+    setObjectName(QStringLiteral("FileBrowserDock"));
+    m_tree->setObjectName(QStringLiteral("FileBrowserTree"));
+    m_model->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
+    m_tree->setModel(m_model);
+
+    auto *container = new QWidget(this);
+    auto *layout = new QVBoxLayout(container);
+    auto *buttons = new QHBoxLayout;
+    auto *chooseButton = new QPushButton(tr("Browse…"), container);
+    auto *upButton = new QPushButton(tr("Up"), container);
+    buttons->addWidget(chooseButton);
+    buttons->addWidget(upButton);
+    layout->addLayout(buttons);
+    layout->addWidget(m_tree);
+    layout->setContentsMargins(4, 4, 4, 4);
+    setWidget(container);
+
+    connect(chooseButton, &QPushButton::clicked, this, &FileBrowser::chooseRoot);
+    connect(upButton, &QPushButton::clicked, this, [this] {
+        QDir directory(m_rootPath);
+        if (directory.cdUp())
+            setRootPath(directory.absolutePath());
+    });
+    connect(m_tree, &QTreeView::doubleClicked, this, &FileBrowser::activateItem);
 }
 
-FileBrowser::~FileBrowser()
+bool FileBrowser::setRootPath(const QString &path)
 {
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isDir())
+        return false;
+    const QString canonical = info.canonicalFilePath();
+    if (canonical.isEmpty())
+        return false;
+    m_rootPath = canonical;
+    const QModelIndex root = m_model->setRootPath(canonical);
+    m_tree->setRootIndex(root);
+    emit rootPathChanged(canonical);
+    return true;
 }
 
-void FileBrowser::setRootPath(const QString& path)
+void FileBrowser::chooseRoot()
 {
-    currentPath = path;
-    fileSystemModel->setRootPath(path);
-    fileTreeView->setRootIndex(fileSystemModel->index(path));
+    const QString path = QFileDialog::getExistingDirectory(
+        this, tr("Choose File Browser Root"),
+        m_rootPath.isEmpty() ? QDir::homePath() : m_rootPath);
+    if (!path.isEmpty())
+        setRootPath(path);
 }
 
-void FileBrowser::onItemDoubleClicked(const QModelIndex &index)
+void FileBrowser::activateItem(const QModelIndex &index)
 {
-    QFileInfo fileInfo = fileSystemModel->fileInfo(index);
-    
-    if (fileInfo.isFile())
-    {
-        // Would open file in editor in real implementation
-        qDebug() << "Opening file:" << fileInfo.absoluteFilePath();
-    }
-    else
-    {
-        // Directory navigation - update view
-        setRootPath(fileInfo.absoluteFilePath());
-    }
+    const QFileInfo info = m_model->fileInfo(index);
+    if (info.isDir())
+        setRootPath(info.absoluteFilePath());
+    else if (info.isFile())
+        emit fileActivated(info.absoluteFilePath());
 }

@@ -2,23 +2,26 @@
 
 #include <QDockWidget>
 #include <QListWidget>
-#include <QVBoxLayout>
-#include <QListWidgetItem>
+#include <QString>
+#include <QVector>
+
+struct DocumentListEntry {
+    QString displayName;
+    QString filePath;
+    bool dirty = false;
+};
 
 class DocumentList : public QDockWidget
 {
     Q_OBJECT
-
 public:
     explicit DocumentList(QWidget *parent = nullptr);
-    ~DocumentList();
-
-    void updateDocumentList();
+    void setDocuments(const QVector<DocumentListEntry> &documents, int activeIndex);
     void setActiveDocument(int index);
-    
-private slots:
-    void onItemClicked(QListWidgetItem *item);
-    
+
+signals:
+    void documentActivated(int index);
+
 private:
-    QListWidget *documentListWidget;
+    QListWidget *m_list;
 };

@@ -2,27 +2,26 @@
 
 #include <QDockWidget>
 #include <QTreeWidget>
-#include <QListWidget>
-#include <QVBoxLayout>
-#include <QHeaderView>
-#include <QTreeWidgetItem>
-#include <QModelIndex>
+#include <QString>
+#include <QVector>
+
+struct FunctionEntry {
+    QString name;
+    int line = 0;
+};
+
+QVector<FunctionEntry> parseFunctions(const QString &text, const QString &fileName);
 
 class FunctionList : public QDockWidget
 {
     Q_OBJECT
-
 public:
     explicit FunctionList(QWidget *parent = nullptr);
-    ~FunctionList();
+    void setDocument(const QString &text, const QString &fileName);
 
-    void updateFunctions();
-    void setCurrentDocument(const QString& filename);
+signals:
+    void lineActivated(int zeroBasedLine);
 
-private slots:
-    void onItemDoubleClicked(QTreeWidgetItem *item, int column);
-    
 private:
-    QTreeWidget *functionListWidget;
-    QString currentFilename;
+    QTreeWidget *m_tree;
 };

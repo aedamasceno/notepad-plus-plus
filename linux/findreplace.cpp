@@ -166,9 +166,7 @@ void FindReplaceDialog::showFind() {
             }
         }
     }
-    
+
     setWindowTitle("Find");
     adjustSize();
 }
-
-#include "findreplace.moc"
