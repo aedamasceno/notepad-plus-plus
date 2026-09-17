@@ -280,6 +280,61 @@ void testUnreadableSnapshotIsNotTreatedAsEmpty()
            "startup and shutdown preserve unreadable snapshot object");
 }
 
+void testRecoveredDirtyUndoCannotBecomeClean()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    const QString original = root.filePath(QStringLiteral("named.txt"));
+    writeBytes(original, "original stays unchanged");
+    {
+        SessionManager writer(nullptr, sessionDir, 20);
+        writer.loadSession();
+        writer.updateDocument({QStringLiteral("named-recovered"), original, 0, true},
+                              "named recovered bytes");
+        writer.updateDocument({QStringLiteral("untitled-recovered"), {}, 4, true},
+                              "untitled recovered bytes");
+        writer.setSessionLayout({QStringLiteral("named-recovered"),
+                                 QStringLiteral("untitled-recovered")},
+                                QStringLiteral("named-recovered"));
+        writer.flush();
+    }
+
+    qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
+    QMainWindow *first = createMainWindow();
+    auto *tabs = first->findChild<QTabWidget *>();
+    expect(tabs->count() == 2, "named and untitled dirty documents restore for undo test");
+    for (int i = 0; i < tabs->count(); ++i) {
+        auto *editor = tabs->widget(i)->findChild<ScintillaEditBase *>();
+        editor->send(SCI_APPENDTEXT, 1, reinterpret_cast<sptr_t>("!"));
+        editor->send(SCI_UNDO);
+    }
+    first->findChild<SessionManager *>()->flush();
+    expect(tabs->tabText(0).endsWith(QLatin1Char('*')) &&
+               tabs->tabText(1).endsWith(QLatin1Char('*')),
+           "undo to recovered save point does not mark either document clean");
+    first->close();
+    delete first;
+
+    QMainWindow *second = createMainWindow();
+    tabs = second->findChild<QTabWidget *>();
+    expect(tabs->count() == 2 &&
+               EditorUtils::text(tabs->widget(0)->findChild<ScintillaEditBase *>()) ==
+                   "named recovered bytes" &&
+               EditorUtils::text(tabs->widget(1)->findChild<ScintillaEditBase *>()) ==
+                   "untitled recovered bytes",
+           "checkpoint and restart preserve both recovered buffers after edit and undo");
+    expect(tabs->tabText(0).endsWith(QLatin1Char('*')) &&
+               tabs->tabText(1).endsWith(QLatin1Char('*')),
+           "restarted named and untitled recovered documents remain dirty");
+    QFile namedOriginal(original);
+    expect(namedOriginal.open(QIODevice::ReadOnly) &&
+               namedOriginal.readAll() == "original stays unchanged",
+           "recovered named edit and undo never writes the original");
+    second->close();
+    delete second;
+    qunsetenv("NPP_SESSION_DIR");
+}
+
 void testFailedShutdownStaysOpenAndOffersRetry()
 {
     QTemporaryDir root;
@@ -673,6 +728,7 @@ int main(int argc, char **argv)
     testDirtySnapshotReactivationKeepsLatestBytes();
     testCheckpointFailuresReturnStatusAndCanRetry();
     testUnreadableSnapshotIsNotTreatedAsEmpty();
+    testRecoveredDirtyUndoCannotBecomeClean();
     testFailedShutdownStaysOpenAndOffersRetry();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
     testUnmanagedSnapshotPathCannotDeleteFiles();

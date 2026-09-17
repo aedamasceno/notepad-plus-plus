@@ -62,6 +62,11 @@ public:
     QString getFilePath() const { return currentFilePath; }
     bool isDirty() const { return isModified; }
     void setDirty(bool dirty) { isModified = dirty; updateTitle(); }
+    void setRecoveredDirty(bool dirty) {
+        m_requiresExplicitSave = dirty;
+        setDirty(dirty);
+    }
+    void markExplicitlySaved() { m_requiresExplicitSave = false; }
     void setFilePath(const QString& path) {
         currentFilePath = path;
         updateTitle();
@@ -99,7 +104,7 @@ private:
     void setupActions() {
         // Connect editor signals to track modifications
         connect(editor, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
-            isModified = dirty;
+            isModified = dirty || m_requiresExplicitSave;
             if (dirty)
                 m_recoveryCheckpointBlocked = false;
             updateTitle();
@@ -477,6 +482,7 @@ private:
     QString m_documentId;
     QString m_recoveryWarning;
     bool m_recoveryCheckpointBlocked = false;
+    bool m_requiresExplicitSave = false;
 
     SessionManager* m_sessionManager = nullptr;
 };
@@ -1513,6 +1519,7 @@ bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab) {
                              tr("Could not save %1: %2").arg(filePath, error));
         return false;
     }
+    tab->markExplicitlySaved();
     tab->getEditor()->send(SCI_SETSAVEPOINT);
     tab->setDirty(false);
     return true;
@@ -1610,7 +1617,7 @@ void MainWindow::loadSession() {
             tab->getEditor()->send(SCI_SETTEXT, 0,
                                    reinterpret_cast<sptr_t>(read.content.constData()));
             tab->getEditor()->send(SCI_SETSAVEPOINT);
-            tab->setDirty(document.dirty);
+            tab->setRecoveredDirty(document.dirty);
         }
         QString warning;
         switch (document.recoveryState) {
