@@ -101,6 +101,7 @@ void SessionManager::loadSession()
 
     QFile file(m_sessionFilePath);
     if (!file.open(QIODevice::ReadOnly)) {
+        m_writesBlocked = true;
         m_diagnostics << QStringLiteral("Could not read session metadata: %1").arg(file.errorString());
         return;
     }

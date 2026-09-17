@@ -462,6 +462,29 @@ void testMalformedMetadataMissingBackupAndOrphanPreservation()
     qunsetenv("NPP_SESSION_DIR");
 }
 
+void testMetadataOpenFailureBlocksWritesAndPreservesObject()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    const QString metadataPath = sessionDir + QStringLiteral("/session.json");
+    expect(QDir().mkpath(metadataPath),
+           "create directory metadata fixture that QFile cannot open");
+    expect(QFileInfo(sessionDir).isWritable(),
+           "metadata open-failure fixture keeps session parent writable");
+
+    SessionManager manager(nullptr, sessionDir, 20);
+    manager.loadSession();
+    expect(manager.writesBlocked(), "metadata open failure blocks recovery writes");
+    manager.updateDocument({QStringLiteral("must-not-write"), {}, 1, true},
+                           "must not create recovery state");
+    expect(manager.documents().isEmpty(),
+           "startup metadata open failure rejects later document updates");
+    expect(manager.shutdown() == CheckpointStatus::WritesBlocked,
+           "shutdown reports writes blocked after metadata open failure");
+    expect(QFileInfo(metadataPath).isDir(),
+           "startup and shutdown preserve the existing metadata object");
+}
+
 void testMissingSnapshotCloseRequiresExplicitDecision()
 {
     QTemporaryDir root;
@@ -909,6 +932,7 @@ int main(int argc, char **argv)
     testRecoveredDirtyUndoCannotBecomeClean();
     testFailedShutdownStaysOpenAndOffersRetry();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
+    testMetadataOpenFailureBlocksWritesAndPreservesObject();
     testMissingSnapshotCloseRequiresExplicitDecision();
     testUnmanagedSnapshotPathCannotDeleteFiles();
     testLegacyMigrationKeepsSourceAndDeduplicates();
