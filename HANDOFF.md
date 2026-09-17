@@ -1,5 +1,15 @@
 # Linux panel batch handoff
 
+## Repository state
+
+- Branch: `linux-port-recovery`
+- Starting HEAD: `8a6884b5675234fcd76236edbee950eb0bcf88ef`
+- Implementation commit: `b4902190142f9673f067784ddb027d1d8c5f7759`
+- Verification handoff commit: `cfde49cc624f31d0e0cdcd7f745a6086d3f6c3fd`
+- Explicit-save safety commit: `721802225d6003b0d811cd987966e5ce91bb8d51`
+- No remote history was rewritten and nothing was pushed.
+- After verification, the only working-tree entries were the preserved untracked `demo.cpp` and `demo.py`.
+
 ## Implemented
 
 - `replaceAll` now loops over `SCI_SEARCHINTARGET`/`SCI_REPLACETARGET`, uses UTF-8 byte lengths, honors Scintilla search flags, and advances past inserted bytes so replacements containing the search text terminate.
