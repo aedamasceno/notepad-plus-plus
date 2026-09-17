@@ -107,10 +107,15 @@ Durable captured output:
 
 Actual results after final correction `b9c46c63c`:
 
-- Focused recovery executable: `All Linux recovery tests passed`; latest output captured in `/tmp/npp-review-final-green.txt`.
-- CTest: `2/2` passed, `0` failed, in 3.41 seconds; captured in `/tmp/npp-review-final-ctest.txt`.
+- Configure and clean serial build: succeeded for `npp_linux`, `linux_panel_tests`, and `linux_recovery_tests`; the existing non-fatal missing CUPS development-files note remains.
+- CTest: `2/2` passed, `0` failed, in 3.42 seconds.
+- Focused panel executable: `All Linux panel tests passed`.
+- Focused recovery executable: `All Linux recovery tests passed`; final-correction output is captured in `/tmp/npp-review-final-green.txt`.
+- Focused failed-shutdown path (`--failed-shutdown-test`): passed.
+- Isolated offscreen smoke: application remained running for 5 seconds.
 - `git diff --check`: passed.
 - The final independent-review blocker is addressed by `b9c46c63c` with a strict red-green regression using a `session.json` directory as a reliable `QFile` open-failure object while its parent remains writable. The prior three review issues remain addressed by `5d2f19d92`; no claim is made that the earlier review passed.
+- A fresh independent review after `b9c46c63c` returned `PASS` with no remaining blocking/high data-loss finding and independently reran the focused recovery CTest successfully.
 
 Recovery coverage uses disposable settings, standard-path, session, and file roots. It exercises exact Unicode restart for untitled and dirty named buffers; order, active selection, stable identities, and dirty state; Save, Save As, Discard, Cancel, Retry, and explicit failed-checkpoint abandonment; blocked/snapshot/metadata write failures; empty, missing, and unreadable snapshots; dirty reactivation; restored edit+undo semantics; failed atomic save preservation; missing/external originals; malformed/unsupported metadata and orphan retention; hostile snapshot paths; helper-process crash recovery after a real debounced MainWindow checkpoint; canonical legacy migration; and historical `npp_linux` discovery. Existing panel/replacement tests remain in the same CTest run.
 
