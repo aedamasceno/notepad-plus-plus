@@ -9,6 +9,12 @@ struct DocumentListEntry {
     QString displayName;
     QString filePath;
     bool dirty = false;
+
+    bool operator==(const DocumentListEntry &other) const
+    {
+        return displayName == other.displayName && filePath == other.filePath &&
+               dirty == other.dirty;
+    }
 };
 
 class DocumentList : public QDockWidget
@@ -24,4 +30,5 @@ signals:
 
 private:
     QListWidget *m_list;
+    QVector<DocumentListEntry> m_documents;
 };

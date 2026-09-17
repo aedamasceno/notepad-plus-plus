@@ -14,6 +14,22 @@ QByteArray text(ScintillaEditBase *editor)
     return result;
 }
 
+DocumentViewport documentViewport(ScintillaEditBase *editor)
+{
+    if (!editor)
+        return {};
+    const int documentLines = qMax(1, int(editor->send(SCI_GETLINECOUNT)));
+    const int firstDisplayLine = qMax(0, int(editor->send(SCI_GETFIRSTVISIBLELINE)));
+    const int displayLines = qMax(1, int(editor->send(SCI_LINESONSCREEN)));
+    const int firstDocumentLine = qBound(
+        0, int(editor->send(SCI_DOCLINEFROMVISIBLE, firstDisplayLine)), documentLines - 1);
+    const int lastDocumentLine = qBound(
+        firstDocumentLine,
+        int(editor->send(SCI_DOCLINEFROMVISIBLE, firstDisplayLine + displayLines - 1)),
+        documentLines - 1);
+    return {firstDocumentLine, lastDocumentLine - firstDocumentLine + 1};
+}
+
 int replaceAll(ScintillaEditBase *editor, const QByteArray &findText,
                const QByteArray &replaceText, int searchFlags)
 {

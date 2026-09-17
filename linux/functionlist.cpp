@@ -65,6 +65,10 @@ FunctionList::FunctionList(QWidget *parent)
 
 void FunctionList::setDocument(const QString &text, const QString &fileName)
 {
+    if (text == m_text && fileName == m_fileName)
+        return;
+    m_text = text;
+    m_fileName = fileName;
     m_tree->clear();
     const auto functions = parseFunctions(text, fileName);
     for (const auto &function : functions) {

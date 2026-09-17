@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDockWidget>
+#include <QPair>
 #include <QWidget>
 
 class DocumentOverview : public QWidget
@@ -10,6 +11,10 @@ public:
     explicit DocumentOverview(QWidget *parent = nullptr);
     void setDocument(const QString &text, int firstVisibleLine, int visibleLineCount);
     void setViewport(int firstVisibleLine, int visibleLineCount);
+
+    static int lineToY(int line, int lineCount, int height);
+    static int lineAtY(int y, int lineCount, int height);
+    static QPair<int, int> lineRangeForPixel(int y, int lineCount, int height);
 
 signals:
     void lineActivated(int zeroBasedLine);

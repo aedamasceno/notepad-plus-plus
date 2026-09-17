@@ -78,12 +78,15 @@ target_compile_options(npp_linux_support PRIVATE -include cstdint)
 target_link_libraries(npp_linux_support PUBLIC Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport)
 target_compile_features(npp_linux_support PUBLIC cxx_std_17)
 
+add_library(npp_linux_app STATIC mainwindow.cpp)
+target_link_libraries(npp_linux_app PUBLIC npp_linux_support)
+
 add_executable(npp_linux main.cpp resources.qrc)
-target_link_libraries(npp_linux PRIVATE npp_linux_support)
+target_link_libraries(npp_linux PRIVATE npp_linux_app)
 
 if(BUILD_TESTING)
     add_executable(linux_panel_tests tests/paneltests.cpp)
-    target_link_libraries(linux_panel_tests PRIVATE npp_linux_support)
+    target_link_libraries(linux_panel_tests PRIVATE npp_linux_app)
     add_test(NAME linux_panel_tests COMMAND linux_panel_tests)
     set_tests_properties(linux_panel_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

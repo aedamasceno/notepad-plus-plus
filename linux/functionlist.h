@@ -24,4 +24,6 @@ signals:
 
 private:
     QTreeWidget *m_tree;
+    QString m_text;
+    QString m_fileName;
 };

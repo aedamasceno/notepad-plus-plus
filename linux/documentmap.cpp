@@ -17,44 +17,74 @@ void DocumentOverview::setDocument(const QString &text, int firstVisibleLine, in
 
 void DocumentOverview::setViewport(int firstVisibleLine, int visibleLineCount)
 {
-    m_firstVisibleLine = qMax(0, firstVisibleLine);
-    m_visibleLineCount = qMax(1, visibleLineCount);
+    const int lineCount = m_lines.size();
+    m_firstVisibleLine = qBound(0, firstVisibleLine, qMax(0, lineCount - 1));
+    m_visibleLineCount = qBound(1, visibleLineCount, qMax(1, lineCount));
     update();
+}
+
+int DocumentOverview::lineToY(int line, int lineCount, int height)
+{
+    if (lineCount <= 0 || height <= 0)
+        return 0;
+    return qBound(0, int((qint64(qBound(0, line, lineCount)) * height) / lineCount), height);
+}
+
+int DocumentOverview::lineAtY(int y, int lineCount, int height)
+{
+    if (lineCount <= 0 || height <= 0)
+        return 0;
+    return qBound(0, int((qint64(qBound(0, y, height - 1)) * lineCount) / height),
+                  lineCount - 1);
+}
+
+QPair<int, int> DocumentOverview::lineRangeForPixel(int y, int lineCount, int height)
+{
+    if (lineCount <= 0 || height <= 0)
+        return {0, 0};
+    const int boundedY = qBound(0, y, height - 1);
+    const int first = int((qint64(boundedY) * lineCount) / height);
+    const int lastExclusive = int((qint64(boundedY + 1) * lineCount + height - 1) / height);
+    return {qBound(0, first, lineCount), qBound(first, lastExclusive, lineCount)};
 }
 
 void DocumentOverview::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.fillRect(rect(), palette().base());
-    if (m_lines.isEmpty())
+    const int lineCount = m_lines.size();
+    if (lineCount == 0 || height() <= 0)
         return;
 
-    const qreal lineHeight = qMax<qreal>(1.0, height() / qreal(m_lines.size()));
     painter.setPen(palette().text().color());
-    for (int line = 0; line < m_lines.size(); ++line) {
-        const QString simplified = m_lines.at(line).simplified();
-        if (simplified.isEmpty())
-            continue;
-        const int width = qBound(2, simplified.size() * 2, this->width() - 4);
-        const int y = qMin(height() - 1, int(line * lineHeight));
-        painter.drawLine(2, y, width, y);
+    for (int y = 0; y < height(); ++y) {
+        const auto range = lineRangeForPixel(y, lineCount, height());
+        int densityWidth = 0;
+        for (int line = range.first; line < range.second; ++line) {
+            const int characters = m_lines.at(line).simplified().size();
+            densityWidth = qMax(densityWidth, characters * 2);
+        }
+        if (densityWidth > 0)
+            painter.drawLine(2, y, qBound(2, densityWidth, width() - 4), y);
     }
 
-    const int top = int(m_firstVisibleLine * lineHeight);
-    const int viewportHeight = qMax(3, int(m_visibleLineCount * lineHeight));
+    const int top = lineToY(m_firstVisibleLine, lineCount, height());
+    const int bottom = lineToY(qMin(lineCount, m_firstVisibleLine + m_visibleLineCount),
+                               lineCount, height());
+    const int viewportHeight = qMax(3, bottom - top);
     QColor viewportColor = palette().highlight().color();
     viewportColor.setAlpha(55);
-    painter.fillRect(QRect(0, top, width(), viewportHeight), viewportColor);
+    const QRect viewportRect(0, qMin(top, qMax(0, height() - viewportHeight)),
+                             width(), qMin(viewportHeight, height()));
+    painter.fillRect(viewportRect, viewportColor);
     painter.setPen(palette().highlight().color());
-    painter.drawRect(QRect(0, top, width() - 1, viewportHeight));
+    painter.drawRect(viewportRect.adjusted(0, 0, -1, -1));
 }
 
 void DocumentOverview::mousePressEvent(QMouseEvent *event)
 {
     if (!m_lines.isEmpty()) {
-        const int line = qBound(0, int(event->position().y() * m_lines.size() /
-                                      qMax(1, height())), m_lines.size() - 1);
-        emit lineActivated(line);
+        emit lineActivated(lineAtY(qRound(event->position().y()), m_lines.size(), height()));
     }
 }
 

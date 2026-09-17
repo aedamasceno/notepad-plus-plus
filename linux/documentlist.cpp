@@ -19,6 +19,12 @@ DocumentList::DocumentList(QWidget *parent)
 
 void DocumentList::setDocuments(const QVector<DocumentListEntry> &documents, int activeIndex)
 {
+    if (documents == m_documents) {
+        setActiveDocument(activeIndex);
+        return;
+    }
+
+    m_documents = documents;
     const QSignalBlocker blocker(m_list);
     m_list->clear();
     for (int index = 0; index < documents.size(); ++index) {
