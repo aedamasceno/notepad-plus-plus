@@ -4,6 +4,10 @@ An unofficial native Linux port of **Notepad++** using **Qt 6**, **Scintilla**, 
 
 **No Wine required.**
 
+[Download the alpha](https://github.com/aedamasceno/notepad-plus-plus/releases) · [Report a Linux bug](https://github.com/aedamasceno/notepad-plus-plus/issues/new/choose) · [Help with the Linux port](CONTRIBUTING-LINUX.md)
+
+The published alpha includes an RPM built and tested on **Fedora 44 x86_64**. Read its release notes for installation instructions and limitations. Published packages may lag behind the development branch.
+
 > **Status: Alpha / Work in Progress**
 >
 > The application runs natively on Linux and core editing functionality is operational. Full Notepad++ feature parity is still in progress.
@@ -108,7 +112,7 @@ Areas where help would be particularly useful:
 - C++ code review
 - documentation
 
-If you would like to help, open an issue or submit a pull request.
+If you would like to help, see the [Linux contribution guide](CONTRIBUTING-LINUX.md), open an issue in this repository, or submit a pull request targeting `linux-port`.
 
 ## More Information
 
