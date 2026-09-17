@@ -10,6 +10,7 @@
 - Recovered dirty save-point semantics: `ecb9e28d8a1580e0841fb724caedf247977e229c`
 - Canonical/historical legacy migration: `07a0d95ecbec950dbd5d1ce756f97601939c6829`
 - Independent-review follow-up: `5d2f19d92feb5b4d7552672cb9acaf2b888c064c`
+- Final independent-review correction: `b9c46c63cc54a1d05bb04f372cec761ed1d134a2`
 - No remote history was rewritten and nothing was pushed.
 - The preserved untracked `demo.cpp` and `demo.py` were not modified or committed.
 
@@ -29,7 +30,7 @@
 - Shutdown succeeds only after recovery is durable/no-op, an explicit Save All succeeds, or the user explicitly chooses **Exit and Abandon Recovery**. Retry repeats the checkpoint and Cancel keeps the application open.
 - Recovery reads explicitly distinguish success (including a valid empty snapshot) from failure. Missing or unreadable snapshots restore as visibly dirty protected tabs, require an explicit Save/Discard/Cancel decision on tab close, and cannot be replaced by a blank checkpoint; Cancel retains the tab and metadata.
 - Restored dirty named and untitled buffers remain logically dirty even when edit+undo reaches Scintilla's restore-time save point. Only a successful explicit Save/Save As clears this recovery-dirty state.
-- Malformed/unsupported metadata, duplicate/invalid identities, and unmanaged snapshot paths produce diagnostics and put recovery in read-only mode for that run. This preserves the original metadata and orphan snapshots rather than normalizing or deleting uncertain data. Missing managed snapshots remain represented and are not replaced with empty files during startup/shutdown.
+- Metadata that exists but cannot be opened, malformed/unsupported metadata, duplicate/invalid identities, and unmanaged snapshot paths produce diagnostics and put recovery in read-only mode for that run. This preserves the original metadata object and orphan snapshots rather than normalizing or deleting uncertain data. Missing managed snapshots remain represented and are not replaced with empty files during startup/shutdown.
 - Snapshot paths loaded from metadata must match either the legacy SHA-256 document path or the current document-and-content SHA-256 generation path under the managed `snapshots/` directory, preventing absolute-path or `..` deletion attacks while retaining schema-2 compatibility.
 - Legacy duplicate tab numbers are deduplicated only after a backup opens successfully, so a missing first candidate cannot suppress a later readable copy.
 
@@ -100,15 +101,16 @@ Durable captured output:
 - Independent review issue 1: `/tmp/npp-review-1-red.txt` failed the missing-snapshot visible-dirty assertion; `/tmp/npp-review-1-green.txt` passed the focused recovery suite.
 - Independent review issue 2: `/tmp/npp-review-2-red.txt` showed old committed metadata resolving to uncommitted new bytes after forced metadata failure; `/tmp/npp-review-2-green.txt` passed with immutable snapshot generations.
 - Independent review issue 3: `/tmp/npp-review-3-red.txt` failed both later-readable legacy duplicate assertions; `/tmp/npp-review-3-green.txt` passed after successful-read deduplication.
+- Final independent-review blocker: `/tmp/npp-review-final-red.txt` failed the write-block, rejected-update, and blocked-shutdown assertions when existing metadata could not be opened; `/tmp/npp-review-final-green.txt` passed after metadata open failure began blocking writes while preserving the existing metadata object.
 
 ### Final verification
 
-Actual results after follow-up `5d2f19d92`:
+Actual results after final correction `b9c46c63c`:
 
-- Focused recovery executable: `All Linux recovery tests passed` for each of the three review GREEN runs.
-- CTest: `2/2` passed, `0` failed, in 3.43 seconds; captured in `/tmp/npp-review-ctest.txt`.
+- Focused recovery executable: `All Linux recovery tests passed`; latest output captured in `/tmp/npp-review-final-green.txt`.
+- CTest: `2/2` passed, `0` failed, in 3.41 seconds; captured in `/tmp/npp-review-final-ctest.txt`.
 - `git diff --check`: passed.
-- Independent review found one blocking, one high, and one medium recovery issue in the earlier batch. All three are addressed by `5d2f19d92` with strict red-green regressions and the full-suite evidence above; no claim is made that the earlier review passed.
+- The final independent-review blocker is addressed by `b9c46c63c` with a strict red-green regression using a `session.json` directory as a reliable `QFile` open-failure object while its parent remains writable. The prior three review issues remain addressed by `5d2f19d92`; no claim is made that the earlier review passed.
 
 Recovery coverage uses disposable settings, standard-path, session, and file roots. It exercises exact Unicode restart for untitled and dirty named buffers; order, active selection, stable identities, and dirty state; Save, Save As, Discard, Cancel, Retry, and explicit failed-checkpoint abandonment; blocked/snapshot/metadata write failures; empty, missing, and unreadable snapshots; dirty reactivation; restored edit+undo semantics; failed atomic save preservation; missing/external originals; malformed/unsupported metadata and orphan retention; hostile snapshot paths; helper-process crash recovery after a real debounced MainWindow checkpoint; canonical legacy migration; and historical `npp_linux` discovery. Existing panel/replacement tests remain in the same CTest run.
 
