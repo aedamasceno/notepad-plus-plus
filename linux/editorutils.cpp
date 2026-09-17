@@ -1,7 +1,7 @@
 #include "editorutils.h"
 
 #include "ScintillaEditBase.h"
-#include <QFile>
+#include <QSaveFile>
 
 namespace EditorUtils {
 
@@ -72,8 +72,8 @@ bool writeToFile(ScintillaEditBase *editor, const QString &filePath,
         return false;
     }
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
         if (errorMessage)
             *errorMessage = file.errorString();
         return false;
@@ -83,14 +83,14 @@ bool writeToFile(ScintillaEditBase *editor, const QString &filePath,
     if (file.write(bytes) != bytes.size()) {
         if (errorMessage)
             *errorMessage = file.errorString();
+        file.cancelWriting();
         return false;
     }
-    if (!file.flush()) {
+    if (!file.commit()) {
         if (errorMessage)
             *errorMessage = file.errorString();
         return false;
     }
-    file.close();
     return true;
 }
 

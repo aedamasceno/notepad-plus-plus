@@ -27,6 +27,7 @@
 #include <QSettings>
 #include <QDir>
 #include <QByteArray>
+#include <QUuid>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
 #include "sessionmanager.h"
@@ -46,8 +47,11 @@ class DocumentTab : public QWidget {
     Q_OBJECT
 
 public:
-    DocumentTab(const QString& filePath = "", int tabNumber = 0, QWidget* parent = nullptr)
-        : QWidget(parent), currentFilePath(filePath), isModified(false), tabNumber(tabNumber), m_shouldRegisterWithSessionManager(false) {
+    DocumentTab(const QString& filePath = "", int tabNumber = 0,
+                const QString& documentId = QString(), QWidget* parent = nullptr)
+        : QWidget(parent), currentFilePath(filePath), isModified(false), tabNumber(tabNumber),
+          m_documentId(documentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+                                            : documentId) {
         setupUI();
         setupActions();
         updateTitle();
@@ -65,7 +69,18 @@ public:
         applyLexer();
     }
     int getTabNumber() const { return tabNumber; }
+    QString documentId() const { return m_documentId; }
+    QString recoveryWarning() const { return m_recoveryWarning; }
+    void setRecoveryWarning(const QString &warning) { m_recoveryWarning = warning; }
+    void setRecoveryCheckpointBlocked(bool blocked) { m_recoveryCheckpointBlocked = blocked; }
     void setSessionManager(SessionManager* sessionManager) { m_sessionManager = sessionManager; }
+    void checkpoint() {
+        if (m_sessionManager && !m_recoveryCheckpointBlocked) {
+            m_sessionManager->updateDocument(
+                {m_documentId, currentFilePath, tabNumber, isModified},
+                EditorUtils::text(editor));
+        }
+    }
 
 private:
     void setupUI() {
@@ -85,28 +100,10 @@ private:
         // Connect editor signals to track modifications
         connect(editor, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
             isModified = dirty;
+            if (dirty)
+                m_recoveryCheckpointBlocked = false;
             updateTitle();
-
-            // If this is the first modification and we haven't registered yet,
-            // register with session manager now
-            if (dirty && m_shouldRegisterWithSessionManager && m_sessionManager) {
-                // Get current content from editor
-                Scintilla::Position length = editor->send(SCI_GETTEXTLENGTH);
-                if (length > 0) {
-                    char* buffer = new char[length + 1];
-                    editor->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
-                    QString content(buffer);
-                    delete[] buffer;
-
-                    // Register with session manager
-                    m_sessionManager->addUntitledDocument(content, tabNumber);
-                } else {
-                    // Empty document - still register to keep track of it
-                    m_sessionManager->addUntitledDocument("", tabNumber);
-                }
-
-                m_shouldRegisterWithSessionManager = false;
-            }
+            checkpoint();
         });
 
         // Connect modification signal for session management
@@ -127,23 +124,8 @@ private:
     }
 
     void onTextChanged() {
-        // This will be handled by the MainWindow's session manager
-        if (m_sessionManager) {
-            // Get current content from editor
-            Scintilla::Position length = editor->send(SCI_GETTEXTLENGTH);
-            if (length > 0) {
-                char* buffer = new char[length + 1];
-                editor->send(SCI_GETTEXT, length + 1, reinterpret_cast<sptr_t>(buffer));
-                QString content(buffer);
-                delete[] buffer;
-
-                // Update session manager with current content
-                m_sessionManager->updateUntitledDocumentContent(tabNumber, content);
-            } else {
-                // Empty document
-                m_sessionManager->updateUntitledDocumentContent(tabNumber, "");
-            }
-        }
+        m_recoveryCheckpointBlocked = false;
+        checkpoint();
     }
 
     void onEditorNotify(Scintilla::NotificationData *notification) {
@@ -492,12 +474,11 @@ private:
     QString currentFilePath;
     bool isModified;
     int tabNumber;
+    QString m_documentId;
+    QString m_recoveryWarning;
+    bool m_recoveryCheckpointBlocked = false;
 
-    // Session manager pointer - will be set by MainWindow
     SessionManager* m_sessionManager = nullptr;
-
-    // Flag to indicate if we should register with session manager on first modification
-    bool m_shouldRegisterWithSessionManager;
 };
 
 class MainWindow : public QMainWindow {
@@ -591,7 +572,9 @@ private:
     bool loadFile(const QString &filePath);
     bool saveFileToPath(const QString &filePath, DocumentTab *tab);
     bool saveTab(DocumentTab *tab, bool forceSaveAs = false);
-    void createNewTab(const QString& filePath = "");
+    void createNewTab(const QString& filePath = "", const QString &documentId = QString(),
+                      int restoredUntitledNumber = 0, bool registerWithSession = true);
+    void checkpointSessionLayout();
     int findTabIndexForFilePath(const QString& filePath);
     bool closeTab(int index, bool ensureOneTab = true);
     bool closeAllTabs();
@@ -683,6 +666,7 @@ private:
     FileBrowser* fileBrowserWidget = nullptr;
     DocumentList* documentListWidget = nullptr;
     QTimer m_panelContentTimer;
+    QString m_sessionDiagnostics;
 };
 
 void MainWindow::setupUI() {
@@ -1228,6 +1212,7 @@ void MainWindow::indentGuides() {
 
 void MainWindow::tabChanged(int index) {
     Q_UNUSED(index)
+    checkpointSessionLayout();
     updateEditActionsEnabled();
     updateStatusBar();
     refreshPanels();
@@ -1330,11 +1315,17 @@ void MainWindow::updateStatusBar() {
                          .arg(eolStr)
                          .arg(modeStr);
 
+    if (!currentTab->recoveryWarning().isEmpty())
+        statusText += QStringLiteral("    WARNING: %1").arg(currentTab->recoveryWarning());
+    if (!m_sessionDiagnostics.isEmpty())
+        statusText += QStringLiteral("    RECOVERY: %1").arg(m_sessionDiagnostics);
     statusBar->showMessage(statusText);
 }
 
-void MainWindow::createNewTab(const QString& filePath) {
-    DocumentTab* newTab = new DocumentTab(filePath, nextUntitledNumber, this);
+void MainWindow::createNewTab(const QString& filePath, const QString &documentId,
+                              int restoredUntitledNumber, bool registerWithSession) {
+    const int assignedNumber = restoredUntitledNumber > 0 ? restoredUntitledNumber : nextUntitledNumber;
+    DocumentTab* newTab = new DocumentTab(filePath, assignedNumber, documentId, this);
 
     // Connect the tab's titleChanged signal to update the tab text
     connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
@@ -1361,18 +1352,17 @@ void MainWindow::createNewTab(const QString& filePath) {
 
     QString title;
     if (filePath.isEmpty()) {
-        // For new untitled documents, use sequential naming
-        title = QString("new %1").arg(nextUntitledNumber);
-        nextUntitledNumber++;
-
-        // Set the session manager pointer in the tab using the setter
-        newTab->setSessionManager(m_sessionManager);
+        title = QString("new %1").arg(assignedNumber);
+        nextUntitledNumber = qMax(nextUntitledNumber, assignedNumber + 1);
     } else {
-        // Check if file is already open
-        int existingIndex = findTabIndexForFilePath(filePath);
-        if (existingIndex != -1) {
-            tabWidget->setCurrentIndex(existingIndex);
-            return;
+        // Interactive open suppresses duplicates; identity-based restoration does not.
+        if (registerWithSession) {
+            int existingIndex = findTabIndexForFilePath(filePath);
+            if (existingIndex != -1) {
+                tabWidget->setCurrentIndex(existingIndex);
+                newTab->deleteLater();
+                return;
+            }
         }
         title = QFileInfo(filePath).fileName();
     }
@@ -1380,10 +1370,16 @@ void MainWindow::createNewTab(const QString& filePath) {
     int index = tabWidget->addTab(newTab, title);
     tabWidget->setCurrentIndex(index);
 
-    if (!filePath.isEmpty() && !loadFile(filePath)) {
+    if (!filePath.isEmpty() && registerWithSession && !loadFile(filePath)) {
         tabWidget->removeTab(index);
         newTab->deleteLater();
         return;
+    }
+
+    if (registerWithSession) {
+        newTab->setSessionManager(m_sessionManager);
+        newTab->checkpoint();
+        checkpointSessionLayout();
     }
 
     // Update tab text to include asterisk if needed
@@ -1391,6 +1387,19 @@ void MainWindow::createNewTab(const QString& filePath) {
 
     // Update status bar for new tab
     updateStatusBar();
+}
+
+void MainWindow::checkpointSessionLayout()
+{
+    if (!m_sessionManager)
+        return;
+    QStringList ids;
+    for (int i = 0; i < tabWidget->count(); ++i) {
+        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i)))
+            ids << tab->documentId();
+    }
+    DocumentTab *active = getCurrentTab();
+    m_sessionManager->setSessionLayout(ids, active ? active->documentId() : QString());
 }
 
 int MainWindow::findTabIndexForFilePath(const QString& filePath) {
@@ -1430,8 +1439,8 @@ bool MainWindow::closeTab(int index, bool ensureOneTab) {
         }
     }
 
-    if (tab->getFilePath().isEmpty() && m_sessionManager)
-        m_sessionManager->removeUntitledDocument(tab->getTabNumber());
+    if (m_sessionManager)
+        m_sessionManager->removeDocument(tab->documentId());
     tabWidget->removeTab(index);
     tab->deleteLater();
 
@@ -1522,9 +1531,11 @@ bool MainWindow::saveTab(DocumentTab *tab, bool forceSaveAs)
     }
     if (!saveFileToPath(destination, tab))
         return false;
-    if (tab->getFilePath().isEmpty() && m_sessionManager)
-        m_sessionManager->removeUntitledDocument(tab->getTabNumber());
     tab->setFilePath(destination);
+    tab->setRecoveryWarning({});
+    tab->setRecoveryCheckpointBlocked(false);
+    tab->checkpoint();
+    checkpointSessionLayout();
     refreshPanels();
     return true;
 }
@@ -1556,32 +1567,8 @@ void MainWindow::saveAllTabsAction()
 
     for (int i = 0; i < tabWidget->count() && !saveCancelled; ++i) {
         DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
-        if (tab && tab->isDirty()) {
-            if (tab->getFilePath().isEmpty()) {
-                // Untitled tab - use Save As workflow
-                QString fileName = QFileDialog::getSaveFileName(this, "Save File", "", "All Files (*)");
-                if (!fileName.isEmpty()) {
-                    if (saveFileToPath(fileName, tab)) {
-                        tab->setFilePath(fileName);
-                        tab->setDirty(false);
-
-                        // Remove from session manager since it's now a normal file
-                        if (m_sessionManager) {
-                            m_sessionManager->removeUntitledDocument(tab->getTabNumber());
-                        }
-                    } else {
-                        saveCancelled = true;
-                    }
-                } else {
-                    saveCancelled = true;
-                }
-            } else {
-                // File-backed tab - save directly to current path
-                if (!saveFileToPath(tab->getFilePath(), tab)) {
-                    saveCancelled = true;
-                }
-            }
-        }
+        if (tab && tab->isDirty() && !saveTab(tab))
+            saveCancelled = true;
     }
 
     // Update status bar after saving all
@@ -1590,32 +1577,67 @@ void MainWindow::saveAllTabsAction()
 
 // Session management functions
 void MainWindow::saveSession() {
-    if (m_sessionManager) {
-        m_sessionManager->saveSession();
+    if (!m_sessionManager)
+        return;
+    for (int i = 0; i < tabWidget->count(); ++i) {
+        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i)))
+            tab->checkpoint();
     }
+    checkpointSessionLayout();
+    m_sessionManager->flush();
 }
 
 void MainWindow::loadSession() {
-    // Create session manager first
-    m_sessionManager = new SessionManager(this);
-
-    // Load existing session on startup
+    const QString overrideDirectory = QString::fromUtf8(qgetenv("NPP_SESSION_DIR"));
+    m_sessionManager = new SessionManager(this, overrideDirectory);
     m_sessionManager->loadSession();
+    m_sessionDiagnostics = m_sessionManager->diagnostics().join(QStringLiteral(" | "));
 
-    // Restore untitled tabs from session if they exist
-    if (m_sessionManager->hasUntitledDocuments() && !m_sessionManager->getUntitledTabs().isEmpty()) {
-        // This is a simplified version - in practice, you'd want to restore the actual content
-        // For now, we'll just create new tabs for the saved untitled documents
-        QJsonArray untitledTabs = m_sessionManager->getUntitledTabs();
-        for (int i = 0; i < untitledTabs.size(); ++i) {
-            QJsonObject tabObj = untitledTabs[i].toObject();
-            int tabNumber = tabObj["tabNumber"].toInt();
-            // Create a new untitled tab
-            createNewTab();
+    const QString requestedActiveId = m_sessionManager->activeDocumentId();
+    const QVector<RecoveryDocument> recovered = m_sessionManager->documents();
+    for (const RecoveryDocument &document : recovered) {
+        createNewTab(document.filePath, document.id, document.untitledNumber, false);
+        DocumentTab *tab = getCurrentTab();
+        if (!tab)
+            continue;
+        const QByteArray content = m_sessionManager->readRecoveryContent(document);
+        tab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.constData()));
+        tab->getEditor()->send(SCI_SETSAVEPOINT);
+        tab->setDirty(document.dirty);
+        QString warning;
+        switch (document.recoveryState) {
+        case RecoveryState::OriginalMissing:
+            warning = tr("Recovered copy: original file is missing");
+            break;
+        case RecoveryState::OriginalChanged:
+            warning = tr("Recovered copy: original changed externally; save explicitly to replace it");
+            break;
+        case RecoveryState::SnapshotMissing:
+            warning = tr("Recovery snapshot is missing; available content may be incomplete");
+            break;
+        case RecoveryState::Ready:
+            break;
         }
-    } else {
-        // Create initial blank tab if no session data exists
+        tab->setRecoveryWarning(warning);
+        tab->setRecoveryCheckpointBlocked(
+            document.recoveryState == RecoveryState::SnapshotMissing);
+        tab->setSessionManager(m_sessionManager);
+    }
+
+    if (tabWidget->count() == 0)
         createNewTab();
+    else {
+        int activeIndex = 0;
+        for (int i = 0; i < tabWidget->count(); ++i) {
+            auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
+            if (tab && tab->documentId() == requestedActiveId) {
+                activeIndex = i;
+                break;
+            }
+        }
+        tabWidget->setCurrentIndex(activeIndex);
+        checkpointSessionLayout();
+        updateStatusBar();
     }
 }
 
@@ -1999,10 +2021,8 @@ void MainWindow::navigateToLine(int line)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (!closeAllTabs()) {
-        event->ignore();
-        return;
-    }
+    // Application shutdown is a recovery checkpoint, not an implicit Discard.
+    // Explicit tab Close / Close All retains the Save/Discard/Cancel workflow.
     saveSession();
     QSettings settings;
     settings.setValue(QStringLiteral("mainWindow/geometry"), saveGeometry());

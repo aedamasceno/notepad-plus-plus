@@ -89,6 +89,11 @@ if(BUILD_TESTING)
     target_link_libraries(linux_panel_tests PRIVATE npp_linux_app)
     add_test(NAME linux_panel_tests COMMAND linux_panel_tests)
     set_tests_properties(linux_panel_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(linux_recovery_tests tests/recoverytests.cpp)
+    target_link_libraries(linux_recovery_tests PRIVATE npp_linux_app)
+    add_test(NAME linux_recovery_tests COMMAND linux_recovery_tests)
+    set_tests_properties(linux_recovery_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 include(GNUInstallDirs)

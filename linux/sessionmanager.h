@@ -1,53 +1,98 @@
 #ifndef SESSIONMANAGER_H
 #define SESSIONMANAGER_H
 
+#include <QByteArray>
+#include <QHash>
 #include <QObject>
-#include <QTimer>
-#include <QJsonObject>
-#include <QJsonArray>
 #include <QString>
-#include <QMap>
+#include <QStringList>
+#include <QTimer>
+#include <QVector>
+
+class QJsonObject;
+
+enum class RecoveryState {
+    Ready,
+    OriginalMissing,
+    OriginalChanged,
+    SnapshotMissing
+};
+
+struct RecoveryDocument {
+    QString id;
+    QString filePath;
+    int untitledNumber = 0;
+    bool dirty = false;
+    QString snapshotPath;
+    bool originalExisted = false;
+    qint64 originalSize = -1;
+    qint64 originalMtimeMs = -1;
+    QByteArray originalSha256;
+    RecoveryState recoveryState = RecoveryState::Ready;
+};
+
+struct DocumentCheckpoint {
+    QString id;
+    QString filePath;
+    int untitledNumber = 0;
+    bool dirty = false;
+};
 
 class SessionManager : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit SessionManager(QObject *parent = nullptr);
-    ~SessionManager();
+    static constexpr int SchemaVersion = 2;
+    static constexpr int DefaultCheckpointIntervalMs = 1000;
 
-    void saveSession();
+    explicit SessionManager(QObject *parent = nullptr,
+                            const QString &storageDirectory = QString(),
+                            int checkpointIntervalMs = DefaultCheckpointIntervalMs,
+                            const QStringList &legacyDirectories = {});
+    ~SessionManager() override;
+
     void loadSession();
-    void clearSession();
-    
-    // For handling untitled documents
-    void addUntitledDocument(const QString& content, int tabNumber);
-    void removeUntitledDocument(int tabNumber);
-    void updateUntitledDocumentContent(int tabNumber, const QString& content);
-    bool hasUntitledDocuments() const;
-    
-    // For application shutdown
+    void updateDocument(const DocumentCheckpoint &document, const QByteArray &content);
+    void removeDocument(const QString &id);
+    void setSessionLayout(const QStringList &orderedIds, const QString &activeId);
+    void flush();
     void shutdown();
-    
-    // Accessors for session data
-    int getActiveTabNumber() const;
-    QJsonArray getUntitledTabs() const;
+
+    QVector<RecoveryDocument> documents() const;
+    QString activeDocumentId() const;
+    QByteArray readRecoveryContent(const RecoveryDocument &document) const;
+    QStringList diagnostics() const;
+    QString storageDirectory() const;
+    QString sessionFilePath() const;
+    bool writesBlocked() const;
 
 private:
-    QString getSessionDir() const;
-    QString getBackupFilePath(int tabNumber) const;
-    QString getSessionFilePath() const;
-    
-    void saveSessionFile();
-    void loadSessionFile();
-    
-    QTimer* m_backupTimer;
-    bool m_shouldSaveSession;
-    int m_activeTabNumber;
-    QString m_sessionDir;
+    QString defaultStorageDirectory() const;
+    QStringList defaultLegacyDirectories() const;
+    QString absoluteSnapshotPath(const RecoveryDocument &document) const;
+    QString relativeSnapshotPath(const QString &id) const;
+    int indexOf(const QString &id) const;
+    void captureOriginalMetadata(RecoveryDocument &document);
+    void assessRecoveryState(RecoveryDocument &document);
+    bool writeAtomic(const QString &path, const QByteArray &bytes, QString *error = nullptr) const;
+    void scheduleCheckpoint();
+    void writeCheckpoint();
+    bool loadVersion2(const QJsonObject &root);
+    bool importLegacyDirectory(const QString &directory);
+
+    QTimer m_checkpointTimer;
+    QString m_storageDirectory;
     QString m_sessionFilePath;
-    QJsonArray m_untitledTabs;
-    QMap<int, QString> m_backupFiles;
+    QStringList m_legacyDirectories;
+    QVector<RecoveryDocument> m_documents;
+    QString m_activeDocumentId;
+    QStringList m_diagnostics;
+    QHash<QString, QByteArray> m_pendingSnapshots;
+    QStringList m_obsoleteSnapshots;
+    bool m_metadataDirty = false;
+    bool m_loaded = false;
+    bool m_writesBlocked = false;
 };
 
 #endif // SESSIONMANAGER_H
