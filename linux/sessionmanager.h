@@ -15,7 +15,8 @@ enum class RecoveryState {
     Ready,
     OriginalMissing,
     OriginalChanged,
-    SnapshotMissing
+    SnapshotMissing,
+    SnapshotUnreadable
 };
 
 struct RecoveryDocument {
@@ -36,6 +37,12 @@ struct DocumentCheckpoint {
     QString filePath;
     int untitledNumber = 0;
     bool dirty = false;
+};
+
+struct RecoveryReadResult {
+    bool success = false;
+    QByteArray content;
+    QString error;
 };
 
 enum class CheckpointStatus {
@@ -69,7 +76,7 @@ public:
 
     QVector<RecoveryDocument> documents() const;
     QString activeDocumentId() const;
-    QByteArray readRecoveryContent(const RecoveryDocument &document) const;
+    RecoveryReadResult readRecoveryContent(const RecoveryDocument &document) const;
     QStringList diagnostics() const;
     QString storageDirectory() const;
     QString sessionFilePath() const;

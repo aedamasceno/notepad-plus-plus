@@ -147,9 +147,9 @@ void testSessionRoundTripAndConflictDiagnostics()
            "round trip preserves tab order and stable identities");
     expect(reader.activeDocumentId() == QStringLiteral("named-id"),
            "round trip preserves active document identity");
-    expect(reader.readRecoveryContent(docs.value(0)) == QStringLiteral("雪 untitled\n").toUtf8(),
+    expect(reader.readRecoveryContent(docs.value(0)).content == QStringLiteral("雪 untitled\n").toUtf8(),
            "untitled Unicode snapshot restores exactly");
-    expect(reader.readRecoveryContent(docs.value(1)) == QStringLiteral("dirty café\n").toUtf8(),
+    expect(reader.readRecoveryContent(docs.value(1)).content == QStringLiteral("dirty café\n").toUtf8(),
            "dirty named Unicode snapshot restores exactly");
     expect(docs.value(0).dirty && docs.value(1).dirty, "dirty state persists");
 
@@ -158,7 +158,7 @@ void testSessionRoundTripAndConflictDiagnostics()
     conflicted.loadSession();
     expect(conflicted.documents().value(1).recoveryState == RecoveryState::OriginalChanged,
            "external original change is surfaced");
-    expect(conflicted.readRecoveryContent(conflicted.documents().value(1)) ==
+    expect(conflicted.readRecoveryContent(conflicted.documents().value(1)).content ==
                QStringLiteral("dirty café\n").toUtf8(),
            "external change does not replace recovered dirty content");
 }
@@ -184,7 +184,7 @@ void testDirtySnapshotReactivationKeepsLatestBytes()
            "reactivated dirty document survives restart");
     expect(reader.documents().value(0).recoveryState == RecoveryState::Ready,
            "reactivated snapshot still exists after metadata commit cleanup");
-    expect(reader.readRecoveryContent(reader.documents().value(0)) == latest,
+    expect(reader.readRecoveryContent(reader.documents().value(0)).content == latest,
            "reactivated snapshot restores latest exact bytes");
 }
 
@@ -224,6 +224,60 @@ void testCheckpointFailuresReturnStatusAndCanRetry()
     QDir(metadataDir + QStringLiteral("/session.json")).removeRecursively();
     expect(metadataFailure.flush() == CheckpointStatus::Durable,
            "failed metadata remains dirty and retry becomes durable");
+}
+
+void testUnreadableSnapshotIsNotTreatedAsEmpty()
+{
+    QTemporaryDir root;
+    const QString emptyDir = root.filePath(QStringLiteral("empty"));
+    SessionManager emptyWriter(nullptr, emptyDir, 20);
+    emptyWriter.loadSession();
+    emptyWriter.updateDocument({QStringLiteral("empty"), {}, 1, true}, {});
+    emptyWriter.flush();
+    SessionManager emptyReader(nullptr, emptyDir, 20);
+    emptyReader.loadSession();
+    const RecoveryReadResult empty = emptyReader.readRecoveryContent(emptyReader.documents().first());
+    expect(empty.success && empty.content.isEmpty() && empty.error.isEmpty(),
+           "empty snapshot is a successful explicit read result");
+
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    const QString id = QStringLiteral("unreadable");
+    const QString relative = QStringLiteral("snapshots/%1.snapshot").arg(
+        QString::fromLatin1(QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256)
+                                .toHex()));
+    QDir().mkpath(QDir(sessionDir).filePath(relative));
+    const QByteArray metadata = QJsonDocument(
+        QJsonObject{{QStringLiteral("schemaVersion"), 2},
+                    {QStringLiteral("activeDocumentId"), id},
+                    {QStringLiteral("documents"),
+                     QJsonArray{QJsonObject{{QStringLiteral("id"), id},
+                                            {QStringLiteral("dirty"), true},
+                                            {QStringLiteral("untitledNumber"), 1},
+                                            {QStringLiteral("snapshot"), relative}}}}})
+                                    .toJson(QJsonDocument::Compact);
+    writeBytes(sessionDir + QStringLiteral("/session.json"), metadata);
+
+    SessionManager manager(nullptr, sessionDir, 20);
+    manager.loadSession();
+    const RecoveryReadResult unreadable = manager.readRecoveryContent(manager.documents().first());
+    expect(!unreadable.success && !unreadable.error.isEmpty(),
+           "unreadable snapshot is distinct from successfully read empty content");
+    expect(manager.writesBlocked(), "unreadable recovery snapshot blocks destructive checkpoints");
+
+    qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
+    QMainWindow *window = createMainWindow();
+    window->show();
+    processFor(20);
+    chooseMessageBox(QMessageBox::Discard);
+    expect(window->close(), "explicit abandon closes after unreadable recovery warning");
+    delete window;
+    qunsetenv("NPP_SESSION_DIR");
+
+    QFile retained(sessionDir + QStringLiteral("/session.json"));
+    expect(retained.open(QIODevice::ReadOnly) && retained.readAll() == metadata,
+           "startup and shutdown preserve metadata after snapshot read failure");
+    expect(QFileInfo(QDir(sessionDir).filePath(relative)).isDir(),
+           "startup and shutdown preserve unreadable snapshot object");
 }
 
 void testFailedShutdownStaysOpenAndOffersRetry()
@@ -355,7 +409,7 @@ void testLegacyMigrationKeepsSourceAndDeduplicates()
     SessionManager manager(nullptr, canonical, 20, {legacy});
     manager.loadSession();
     expect(manager.documents().size() == 1, "legacy migration deduplicates duplicate tabs");
-    expect(manager.readRecoveryContent(manager.documents().first()) ==
+    expect(manager.readRecoveryContent(manager.documents().first()).content ==
                QStringLiteral("legacy 雪").toUtf8(),
            "legacy migration imports exact bytes");
     expect(QFileInfo::exists(legacy + QStringLiteral("/session.json")) &&
@@ -618,6 +672,7 @@ int main(int argc, char **argv)
     testSessionRoundTripAndConflictDiagnostics();
     testDirtySnapshotReactivationKeepsLatestBytes();
     testCheckpointFailuresReturnStatusAndCanRetry();
+    testUnreadableSnapshotIsNotTreatedAsEmpty();
     testFailedShutdownStaysOpenAndOffersRetry();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
     testUnmanagedSnapshotPathCannotDeleteFiles();

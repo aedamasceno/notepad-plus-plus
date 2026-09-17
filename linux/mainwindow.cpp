@@ -1605,10 +1605,13 @@ void MainWindow::loadSession() {
         DocumentTab *tab = getCurrentTab();
         if (!tab)
             continue;
-        const QByteArray content = m_sessionManager->readRecoveryContent(document);
-        tab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.constData()));
-        tab->getEditor()->send(SCI_SETSAVEPOINT);
-        tab->setDirty(document.dirty);
+        const RecoveryReadResult read = m_sessionManager->readRecoveryContent(document);
+        if (read.success) {
+            tab->getEditor()->send(SCI_SETTEXT, 0,
+                                   reinterpret_cast<sptr_t>(read.content.constData()));
+            tab->getEditor()->send(SCI_SETSAVEPOINT);
+            tab->setDirty(document.dirty);
+        }
         QString warning;
         switch (document.recoveryState) {
         case RecoveryState::OriginalMissing:
@@ -1620,12 +1623,16 @@ void MainWindow::loadSession() {
         case RecoveryState::SnapshotMissing:
             warning = tr("Recovery snapshot is missing; available content may be incomplete");
             break;
+        case RecoveryState::SnapshotUnreadable:
+            warning = tr("Recovery snapshot could not be read; recovery data was preserved");
+            break;
         case RecoveryState::Ready:
             break;
         }
         tab->setRecoveryWarning(warning);
         tab->setRecoveryCheckpointBlocked(
-            document.recoveryState == RecoveryState::SnapshotMissing);
+            !read.success || document.recoveryState == RecoveryState::SnapshotMissing ||
+            document.recoveryState == RecoveryState::SnapshotUnreadable);
         tab->setSessionManager(m_sessionManager);
     }
 

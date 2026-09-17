@@ -35,6 +35,8 @@ QString stateDiagnostic(const RecoveryDocument &document)
             .arg(document.filePath);
     case RecoveryState::SnapshotMissing:
         return QStringLiteral("Recovery snapshot is missing for document %1").arg(document.id);
+    case RecoveryState::SnapshotUnreadable:
+        return QStringLiteral("Recovery snapshot is unreadable for document %1").arg(document.id);
     case RecoveryState::Ready:
         return {};
     }
@@ -163,6 +165,8 @@ bool SessionManager::loadVersion2(const QJsonObject &root)
         document.originalSha256 = QByteArray::fromHex(
             object.value(QStringLiteral("originalSha256")).toString().toLatin1());
         assessRecoveryState(document);
+        if (document.recoveryState == RecoveryState::SnapshotUnreadable)
+            m_writesBlocked = true;
         const QString diagnostic = stateDiagnostic(document);
         if (!diagnostic.isEmpty())
             m_diagnostics << diagnostic;
@@ -280,6 +284,13 @@ void SessionManager::assessRecoveryState(RecoveryDocument &document)
                            !QFileInfo::exists(absoluteSnapshotPath(document)))) {
         document.recoveryState = RecoveryState::SnapshotMissing;
         return;
+    }
+    if (document.dirty) {
+        QFile snapshot(absoluteSnapshotPath(document));
+        if (!snapshot.open(QIODevice::ReadOnly)) {
+            document.recoveryState = RecoveryState::SnapshotUnreadable;
+            return;
+        }
     }
     if (document.filePath.isEmpty()) {
         document.recoveryState = RecoveryState::Ready;
@@ -497,15 +508,15 @@ QString SessionManager::activeDocumentId() const
     return m_activeDocumentId;
 }
 
-QByteArray SessionManager::readRecoveryContent(const RecoveryDocument &document) const
+RecoveryReadResult SessionManager::readRecoveryContent(const RecoveryDocument &document) const
 {
     if (document.dirty && m_pendingSnapshots.contains(document.id))
-        return m_pendingSnapshots.value(document.id);
+        return {true, m_pendingSnapshots.value(document.id), {}};
     const QString path = document.dirty ? absoluteSnapshotPath(document) : document.filePath;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
-        return {};
-    return file.readAll();
+        return {false, {}, file.errorString()};
+    return {true, file.readAll(), {}};
 }
 
 QStringList SessionManager::diagnostics() const
