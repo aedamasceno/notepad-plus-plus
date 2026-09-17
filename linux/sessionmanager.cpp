@@ -73,6 +73,7 @@ QStringList SessionManager::defaultLegacyDirectories() const
     const QString generic = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
     QStringList candidates{
         QDir(generic).filePath(QStringLiteral("notepad++/sessions")),
+        QDir(generic).filePath(QStringLiteral("npp_linux/notepad++/sessions")),
         QDir(generic).filePath(QStringLiteral("Notepad++/notepad++/sessions")),
         QDir(generic).filePath(QStringLiteral("Notepad++/Notepad++ Linux/notepad++/sessions"))
     };
@@ -104,7 +105,8 @@ void SessionManager::loadSession()
         return;
     }
     QJsonParseError parseError;
-    const QJsonDocument json = QJsonDocument::fromJson(file.readAll(), &parseError);
+    const QByteArray metadataBytes = file.readAll();
+    const QJsonDocument json = QJsonDocument::fromJson(metadataBytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !json.isObject()) {
         m_writesBlocked = true;
         m_diagnostics << QStringLiteral("Malformed session metadata retained at %1; recovery writes are disabled: %2")
@@ -112,6 +114,34 @@ void SessionManager::loadSession()
         return;
     }
     const QJsonObject root = json.object();
+    if (!root.contains(QStringLiteral("schemaVersion")) &&
+        root.value(QStringLiteral("untitledTabs")).isArray()) {
+        const QString preservedPath =
+            QDir(m_storageDirectory).filePath(QStringLiteral("session.legacy.json"));
+        bool preserved = false;
+        QFile existing(preservedPath);
+        if (existing.exists() && existing.open(QIODevice::ReadOnly))
+            preserved = existing.readAll() == metadataBytes;
+        if (!preserved && !QFileInfo::exists(preservedPath)) {
+            QString error;
+            preserved = writeAtomic(preservedPath, metadataBytes, &error);
+            if (!preserved)
+                m_diagnostics << QStringLiteral("Could not preserve canonical legacy metadata: %1")
+                                     .arg(error);
+        }
+        if (!preserved) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Canonical legacy metadata was retained; migration writes are disabled");
+            return;
+        }
+        if (importLegacyDirectory(m_storageDirectory)) {
+            m_metadataDirty = true;
+        } else {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Canonical legacy metadata had no readable backups and was retained");
+        }
+        return;
+    }
     if (root.value(QStringLiteral("schemaVersion")).toInt() != SchemaVersion) {
         m_writesBlocked = true;
         m_diagnostics << QStringLiteral("Unsupported session schema retained at %1; recovery writes are disabled")

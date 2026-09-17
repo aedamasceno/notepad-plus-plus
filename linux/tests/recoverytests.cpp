@@ -23,6 +23,7 @@
 #include <QProcessEnvironment>
 #include <QSettings>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -476,6 +477,76 @@ void testLegacyMigrationKeepsSourceAndDeduplicates()
     expect(again.documents().size() == 1, "legacy migration remains deduplicated on restart");
 }
 
+void testCanonicalLegacyMigrationPreservesSource()
+{
+    QTemporaryDir root;
+    const QString canonical = root.filePath(QStringLiteral("canonical"));
+    QDir().mkpath(canonical);
+    const QString backup = canonical + QStringLiteral("/new_8.backup");
+    writeBytes(backup, "canonical legacy bytes");
+    const QByteArray oldMetadata = QJsonDocument(
+        QJsonObject{{QStringLiteral("activeTab"), 8},
+                    {QStringLiteral("untitledTabs"),
+                     QJsonArray{QJsonObject{{QStringLiteral("tabNumber"), 8},
+                                            {QStringLiteral("backupPath"), backup}}}}})
+                                           .toJson(QJsonDocument::Compact);
+    writeBytes(canonical + QStringLiteral("/session.json"), oldMetadata);
+
+    SessionManager manager(nullptr, canonical, 20);
+    manager.loadSession();
+    expect(!manager.writesBlocked() && manager.documents().size() == 1,
+           "legacy schema at canonical session.json is recognized for migration");
+    expect(!manager.documents().isEmpty() &&
+               manager.readRecoveryContent(manager.documents().first()).content ==
+                   "canonical legacy bytes",
+           "canonical legacy migration imports exact backup bytes");
+    manager.flush();
+
+    QFile preserved(canonical + QStringLiteral("/session.legacy.json"));
+    expect(preserved.open(QIODevice::ReadOnly) && preserved.readAll() == oldMetadata,
+           "canonical migration preserves old metadata in a sidecar");
+    expect(QFileInfo::exists(backup), "canonical migration preserves old backup");
+    SessionManager restarted(nullptr, canonical, 20);
+    restarted.loadSession();
+    expect(!restarted.documents().isEmpty() &&
+               restarted.readRecoveryContent(restarted.documents().first()).content ==
+                   "canonical legacy bytes",
+           "canonical legacy migration survives restart in current schema");
+}
+
+void testHistoricalNppLinuxLocationDiscovery()
+{
+    QTemporaryDir root;
+    const QString generic = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    const QString historical =
+        QDir(generic).filePath(QStringLiteral("npp_linux/notepad++/sessions"));
+    QDir(historical).removeRecursively();
+    QDir().mkpath(historical);
+    const QString backup = QDir(historical).filePath(QStringLiteral("new_6.backup"));
+    writeBytes(backup, "historical npp_linux bytes");
+    const QByteArray metadata = QJsonDocument(
+        QJsonObject{{QStringLiteral("activeTab"), 6},
+                    {QStringLiteral("untitledTabs"),
+                     QJsonArray{QJsonObject{{QStringLiteral("tabNumber"), 6},
+                                            {QStringLiteral("backupPath"), backup}}}}})
+                                      .toJson(QJsonDocument::Compact);
+    writeBytes(QDir(historical).filePath(QStringLiteral("session.json")), metadata);
+
+    const QString canonical = root.filePath(QStringLiteral("canonical"));
+    SessionManager manager(nullptr, canonical, 20);
+    manager.loadSession();
+    expect(!manager.documents().isEmpty() &&
+               manager.readRecoveryContent(manager.documents().first()).content ==
+                   "historical npp_linux bytes",
+           "default discovery imports pre-organization npp_linux application data");
+    expect(QFileInfo::exists(backup), "historical discovery preserves old backup");
+    QFile retained(QDir(historical).filePath(QStringLiteral("session.json")));
+    expect(retained.open(QIODevice::ReadOnly) && retained.readAll() == metadata,
+           "historical discovery preserves old metadata");
+    retained.close();
+    QDir(historical).removeRecursively();
+}
+
 void testAtomicOrdinarySaveFailurePreservesOriginal()
 {
     QTemporaryDir root;
@@ -700,6 +771,8 @@ void testCrashCheckpointRecovery(const QString &executable)
 int main(int argc, char **argv)
 {
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    QTemporaryDir standardPathsDirectory;
+    qputenv("XDG_DATA_HOME", standardPathsDirectory.path().toUtf8());
     QApplication app(argc, argv);
     QTemporaryDir settingsDirectory;
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -733,6 +806,8 @@ int main(int argc, char **argv)
     testMalformedMetadataMissingBackupAndOrphanPreservation();
     testUnmanagedSnapshotPathCannotDeleteFiles();
     testLegacyMigrationKeepsSourceAndDeduplicates();
+    testCanonicalLegacyMigrationPreservesSource();
+    testHistoricalNppLinuxLocationDiscovery();
     testAtomicOrdinarySaveFailurePreservesOriginal();
     testMainWindowRestartPreservesOrderActiveAndDirty();
     testCancelAndDiscardRecoveryLifecycle();
