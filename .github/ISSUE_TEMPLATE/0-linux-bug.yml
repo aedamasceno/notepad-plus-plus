@@ -1,0 +1,44 @@
+name: Linux port bug report
+description: Report a problem with the unofficial native Linux port.
+title: "[Linux] "
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for testing the alpha. Include reproducible steps and use non-sensitive sample files."
+  - type: input
+    id: version
+    attributes:
+      label: Release version or commit
+      placeholder: "Release tag or git rev-parse HEAD output"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Linux environment
+      description: "Distribution/version, CPU architecture, desktop, Wayland or X11, and RPM or source build."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or sample files
+      description: "For build failures, include the command and first relevant error. Remove personal information."
