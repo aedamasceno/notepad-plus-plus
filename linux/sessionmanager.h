@@ -38,6 +38,14 @@ struct DocumentCheckpoint {
     bool dirty = false;
 };
 
+enum class CheckpointStatus {
+    Durable,
+    NoChanges,
+    WritesBlocked,
+    SnapshotWriteFailed,
+    MetadataWriteFailed
+};
+
 class SessionManager : public QObject
 {
     Q_OBJECT
@@ -56,8 +64,8 @@ public:
     void updateDocument(const DocumentCheckpoint &document, const QByteArray &content);
     void removeDocument(const QString &id);
     void setSessionLayout(const QStringList &orderedIds, const QString &activeId);
-    void flush();
-    void shutdown();
+    CheckpointStatus flush();
+    CheckpointStatus shutdown();
 
     QVector<RecoveryDocument> documents() const;
     QString activeDocumentId() const;
@@ -66,6 +74,9 @@ public:
     QString storageDirectory() const;
     QString sessionFilePath() const;
     bool writesBlocked() const;
+
+signals:
+    void checkpointFailed(const QString &message);
 
 private:
     QString defaultStorageDirectory() const;
@@ -77,7 +88,7 @@ private:
     void assessRecoveryState(RecoveryDocument &document);
     bool writeAtomic(const QString &path, const QByteArray &bytes, QString *error = nullptr) const;
     void scheduleCheckpoint();
-    void writeCheckpoint();
+    CheckpointStatus writeCheckpoint();
     bool loadVersion2(const QJsonObject &root);
     bool importLegacyDirectory(const QString &directory);
 

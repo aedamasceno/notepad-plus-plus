@@ -588,7 +588,7 @@ private:
     void navigateToLine(int line);
 
     // Session management
-    void saveSession();
+    CheckpointStatus saveSession();
     void loadSession();
 
     QTabWidget* tabWidget;
@@ -1576,20 +1576,25 @@ void MainWindow::saveAllTabsAction()
 }
 
 // Session management functions
-void MainWindow::saveSession() {
+CheckpointStatus MainWindow::saveSession() {
     if (!m_sessionManager)
-        return;
+        return CheckpointStatus::NoChanges;
     for (int i = 0; i < tabWidget->count(); ++i) {
         if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i)))
             tab->checkpoint();
     }
     checkpointSessionLayout();
-    m_sessionManager->flush();
+    return m_sessionManager->flush();
 }
 
 void MainWindow::loadSession() {
     const QString overrideDirectory = QString::fromUtf8(qgetenv("NPP_SESSION_DIR"));
     m_sessionManager = new SessionManager(this, overrideDirectory);
+    connect(m_sessionManager, &SessionManager::checkpointFailed, this,
+            [this](const QString &message) {
+                m_sessionDiagnostics = message;
+                statusBar->showMessage(tr("RECOVERY WRITE FAILED: %1").arg(message));
+            });
     m_sessionManager->loadSession();
     m_sessionDiagnostics = m_sessionManager->diagnostics().join(QStringLiteral(" | "));
 
@@ -2023,7 +2028,44 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     // Application shutdown is a recovery checkpoint, not an implicit Discard.
     // Explicit tab Close / Close All retains the Save/Discard/Cancel workflow.
-    saveSession();
+    CheckpointStatus checkpoint = saveSession();
+    while (checkpoint != CheckpointStatus::Durable &&
+           checkpoint != CheckpointStatus::NoChanges) {
+        QMessageBox prompt(this);
+        prompt.setIcon(QMessageBox::Critical);
+        prompt.setWindowTitle(tr("Recovery Write Failed"));
+        prompt.setText(tr("Unsaved buffers could not be written to recovery storage."));
+        prompt.setInformativeText(
+            tr("Retry after fixing storage, save files explicitly, or explicitly abandon "
+               "the unpersisted data."));
+        prompt.setStandardButtons(QMessageBox::Retry | QMessageBox::Save |
+                                  QMessageBox::Discard | QMessageBox::Cancel);
+        prompt.setDefaultButton(QMessageBox::Retry);
+        prompt.button(QMessageBox::Save)->setText(tr("Save All…"));
+        prompt.button(QMessageBox::Discard)->setText(tr("Exit and Abandon Recovery"));
+        const int decision = prompt.exec();
+        if (decision == QMessageBox::Cancel) {
+            event->ignore();
+            return;
+        }
+        if (decision == QMessageBox::Discard)
+            break;
+        if (decision == QMessageBox::Save) {
+            bool allSaved = true;
+            for (int i = 0; i < tabWidget->count(); ++i) {
+                auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
+                if (tab && tab->isDirty() && !saveTab(tab)) {
+                    allSaved = false;
+                    break;
+                }
+            }
+            if (!allSaved) {
+                event->ignore();
+                return;
+            }
+        }
+        checkpoint = saveSession();
+    }
     QSettings settings;
     settings.setValue(QStringLiteral("mainWindow/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("mainWindow/state"), saveState());

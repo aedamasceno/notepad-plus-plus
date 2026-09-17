@@ -5,6 +5,7 @@
 #include "ScintillaEditBase.h"
 
 #include <QAction>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -21,6 +22,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -69,7 +71,10 @@ void chooseMessageBox(QMessageBox::StandardButton button)
     QTimer::singleShot(0, [button] {
         for (QWidget *widget : QApplication::topLevelWidgets()) {
             if (auto *box = qobject_cast<QMessageBox *>(widget); box && box->isVisible()) {
-                box->done(button);
+                if (QAbstractButton *target = box->button(button))
+                    target->click();
+                else
+                    box->done(button);
                 return;
             }
         }
@@ -183,6 +188,76 @@ void testDirtySnapshotReactivationKeepsLatestBytes()
            "reactivated snapshot restores latest exact bytes");
 }
 
+void testCheckpointFailuresReturnStatusAndCanRetry()
+{
+    QTemporaryDir root;
+
+    const QString blockedDir = root.filePath(QStringLiteral("blocked"));
+    QDir().mkpath(blockedDir);
+    writeBytes(blockedDir + QStringLiteral("/session.json"),
+               QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 999}}).toJson());
+    SessionManager blocked(nullptr, blockedDir, 20);
+    blocked.loadSession();
+    expect(blocked.flush() == CheckpointStatus::WritesBlocked,
+           "flush reports recovery writes blocked by unsupported metadata");
+
+    const QString snapshotDir = root.filePath(QStringLiteral("snapshot-failure"));
+    QDir().mkpath(snapshotDir);
+    writeBytes(snapshotDir + QStringLiteral("/snapshots"), "blocks snapshot directory");
+    SessionManager snapshotFailure(nullptr, snapshotDir, 20);
+    snapshotFailure.loadSession();
+    snapshotFailure.updateDocument({QStringLiteral("dirty"), {}, 1, true}, "must survive");
+    expect(snapshotFailure.flush() == CheckpointStatus::SnapshotWriteFailed,
+           "flush reports snapshot write failure");
+    QFile::remove(snapshotDir + QStringLiteral("/snapshots"));
+    QDir().mkpath(snapshotDir + QStringLiteral("/snapshots"));
+    expect(snapshotFailure.flush() == CheckpointStatus::Durable,
+           "failed snapshot remains pending and retry becomes durable");
+
+    const QString metadataDir = root.filePath(QStringLiteral("metadata-failure"));
+    SessionManager metadataFailure(nullptr, metadataDir, 20);
+    metadataFailure.loadSession();
+    metadataFailure.updateDocument({QStringLiteral("clean"), {}, 1, false}, {});
+    QDir().mkpath(metadataDir + QStringLiteral("/session.json"));
+    expect(metadataFailure.flush() == CheckpointStatus::MetadataWriteFailed,
+           "flush reports metadata write failure");
+    QDir(metadataDir + QStringLiteral("/session.json")).removeRecursively();
+    expect(metadataFailure.flush() == CheckpointStatus::Durable,
+           "failed metadata remains dirty and retry becomes durable");
+}
+
+void testFailedShutdownStaysOpenAndOffersRetry()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    QDir().mkpath(sessionDir);
+    writeBytes(sessionDir + QStringLiteral("/snapshots"), "blocks snapshot directory");
+    qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
+
+    QMainWindow *window = createMainWindow();
+    window->show();
+    auto *editor = window->findChild<QTabWidget *>()->currentWidget()
+                       ->findChild<ScintillaEditBase *>();
+    editor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>("not durable yet"));
+    expect(window->findChild<SessionManager *>()->flush() ==
+               CheckpointStatus::SnapshotWriteFailed,
+           "window fixture triggers snapshot persistence failure");
+    expect(window->statusBar()->currentMessage().contains(
+               QStringLiteral("Could not write recovery snapshot")),
+           "runtime checkpoint failure is visible in the window");
+
+    chooseMessageBox(QMessageBox::Cancel);
+    expect(!window->close() && window->isVisible(),
+           "cancelling failed shutdown keeps unsaved application open");
+
+    QFile::remove(sessionDir + QStringLiteral("/snapshots"));
+    QDir().mkpath(sessionDir + QStringLiteral("/snapshots"));
+    chooseMessageBox(QMessageBox::Retry);
+    expect(window->close(), "retry after persistence repair permits shutdown");
+    delete window;
+    qunsetenv("NPP_SESSION_DIR");
+}
+
 void testMalformedMetadataMissingBackupAndOrphanPreservation()
 {
     QTemporaryDir root;
@@ -199,6 +274,9 @@ void testMalformedMetadataMissingBackupAndOrphanPreservation()
     expect(QFileInfo::exists(orphan), "malformed metadata never deletes orphan snapshots");
     qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
     QMainWindow *malformedWindow = createMainWindow();
+    malformedWindow->show();
+    processFor(20);
+    chooseMessageBox(QMessageBox::Discard);
     malformedWindow->close();
     delete malformedWindow;
     QFile retainedMalformed(sessionDir + QStringLiteral("/session.json"));
@@ -520,6 +598,10 @@ int main(int argc, char **argv)
     QCoreApplication::setOrganizationName(QStringLiteral("npp-recovery-tests"));
     QCoreApplication::setApplicationName(QStringLiteral("isolated"));
     QSettings().clear();
+    if (app.arguments().contains(QStringLiteral("--failed-shutdown-test"))) {
+        testFailedShutdownStaysOpenAndOffersRetry();
+        return failures == 0 ? 0 : 1;
+    }
     if (app.arguments().size() == 3 && app.arguments().at(1) == QStringLiteral("--checkpoint-helper")) {
         qputenv("NPP_SESSION_DIR", app.arguments().at(2).toUtf8());
         QMainWindow *window = createMainWindow();
@@ -535,6 +617,8 @@ int main(int argc, char **argv)
     }
     testSessionRoundTripAndConflictDiagnostics();
     testDirtySnapshotReactivationKeepsLatestBytes();
+    testCheckpointFailuresReturnStatusAndCanRetry();
+    testFailedShutdownStaysOpenAndOffersRetry();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
     testUnmanagedSnapshotPathCannotDeleteFiles();
     testLegacyMigrationKeepsSourceAndDeduplicates();

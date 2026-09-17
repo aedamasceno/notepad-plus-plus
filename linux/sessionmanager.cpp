@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSignalBlocker>
 #include <QSet>
 #include <QStandardPaths>
 #include <utility>
@@ -55,6 +56,7 @@ SessionManager::SessionManager(QObject *parent, const QString &storageDirectory,
 
 SessionManager::~SessionManager()
 {
+    const QSignalBlocker blocker(this);
     shutdown();
 }
 
@@ -339,12 +341,15 @@ void SessionManager::scheduleCheckpoint()
     m_checkpointTimer.start();
 }
 
-void SessionManager::writeCheckpoint()
+CheckpointStatus SessionManager::writeCheckpoint()
 {
-    if (m_writesBlocked)
-        return;
+    if (m_writesBlocked) {
+        const QString message = QStringLiteral("Recovery checkpoint blocked to preserve existing metadata");
+        emit checkpointFailed(message);
+        return CheckpointStatus::WritesBlocked;
+    }
     if (!m_metadataDirty && m_pendingSnapshots.isEmpty())
-        return;
+        return CheckpointStatus::NoChanges;
 
     bool snapshotsOk = true;
     const auto pending = m_pendingSnapshots;
@@ -356,13 +361,15 @@ void SessionManager::writeCheckpoint()
         const QString path = absoluteSnapshotPath(m_documents[index]);
         if (!writeAtomic(path, it.value(), &error)) {
             snapshotsOk = false;
-            m_diagnostics << QStringLiteral("Could not write recovery snapshot %1: %2").arg(path, error);
+            const QString message = QStringLiteral("Could not write recovery snapshot %1: %2").arg(path, error);
+            m_diagnostics << message;
+            emit checkpointFailed(message);
         } else {
             m_pendingSnapshots.remove(it.key());
         }
     }
     if (!snapshotsOk)
-        return;
+        return CheckpointStatus::SnapshotWriteFailed;
 
     QJsonArray documents;
     for (const RecoveryDocument &document : std::as_const(m_documents)) {
@@ -385,8 +392,10 @@ void SessionManager::writeCheckpoint()
     root.insert(QStringLiteral("checkpointIntervalMs"), m_checkpointTimer.interval());
     QString error;
     if (!writeAtomic(m_sessionFilePath, QJsonDocument(root).toJson(), &error)) {
-        m_diagnostics << QStringLiteral("Could not write session metadata: %1").arg(error);
-        return;
+        const QString message = QStringLiteral("Could not write session metadata: %1").arg(error);
+        m_diagnostics << message;
+        emit checkpointFailed(message);
+        return CheckpointStatus::MetadataWriteFailed;
     }
     m_metadataDirty = false;
     QSet<QString> referencedSnapshots;
@@ -407,6 +416,7 @@ void SessionManager::writeCheckpoint()
             m_diagnostics << QStringLiteral("Could not remove obsolete recovery snapshot: %1")
                                  .arg(path);
     }
+    return CheckpointStatus::Durable;
 }
 
 bool SessionManager::importLegacyDirectory(const QString &directory)
@@ -466,15 +476,15 @@ int SessionManager::indexOf(const QString &id) const
     return -1;
 }
 
-void SessionManager::flush()
+CheckpointStatus SessionManager::flush()
 {
     m_checkpointTimer.stop();
-    writeCheckpoint();
+    return writeCheckpoint();
 }
 
-void SessionManager::shutdown()
+CheckpointStatus SessionManager::shutdown()
 {
-    flush();
+    return flush();
 }
 
 QVector<RecoveryDocument> SessionManager::documents() const
