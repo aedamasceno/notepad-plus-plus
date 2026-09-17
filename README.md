@@ -24,6 +24,22 @@ I am a longtime Notepad++ user who moved to Linux full time. I wanted the famili
 
 The goal is not to create a different editor inspired by Notepad++. The goal is to bring as much of the actual Notepad++ experience as practical to Linux while keeping the port maintainable against upstream development.
 
+## Latest Development — September 17, 2026
+
+New work is available on the
+[linux-port-recovery branch](https://github.com/aedamasceno/notepad-plus-plus/tree/linux-port-recovery):
+
+- Live Function List, File Browser, Document List, and Document Map panels.
+- Session and crash recovery for unsaved and modified documents.
+- Safer saving, recovery checkpoints, and shutdown failure handling.
+- Automated regression tests for panel behavior and document persistence.
+
+These changes are pending final review and integration into the main
+development branch. They are not included in the published alpha download.
+
+Printing, macro recording/playback, dual views, and synchronized scrolling
+remain unfinished.
+
 ## Project Status
 
 | Feature | Status |
