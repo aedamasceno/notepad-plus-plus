@@ -3,8 +3,12 @@
 ## Repository state
 
 - Branch: `linux-port-recovery`
-- Batch starting HEAD: `25648d05b2907a673f0e58f901f83c0f683ef5f2`
-- Recovery implementation and integration tests: `23f992221b0c5a90a2bd66f093462c56d201b037`
+- Batch starting HEAD: `646b4031d4ccdf4b608a8a2b1383bc11baaa6a49`
+- Snapshot reactivation cleanup: `832d8b1f0a444fa722710187d0670a2c6d374dfe`
+- Checkpoint status and failure-safe shutdown: `aaea384671f107dcc2b21e1daf0949476b436db5`
+- Explicit recovery read results: `9d8fde1cb8d81a247cb797d52c3b2f5f0ae530d7`
+- Recovered dirty save-point semantics: `ecb9e28d8a1580e0841fb724caedf247977e229c`
+- Canonical/historical legacy migration: `07a0d95ecbec950dbd5d1ce756f97601939c6829`
 - No remote history was rewritten and nothing was pushed.
 - The preserved untracked `demo.cpp` and `demo.py` were not modified or committed.
 
@@ -19,6 +23,11 @@
   - Discard removes that document from session metadata; its snapshot is removed only after replacement metadata commits.
 - Ordinary saves, recovery snapshots, and session metadata use `QSaveFile`. Failed ordinary saves preserve existing bytes, leave the editor dirty, and display the write error.
 - Recovery writes are debounced for 1000 ms. Text/lifecycle/layout changes schedule checkpoints; cursor movement and scrolling do not. Shutdown stops the timer and synchronously flushes snapshots before metadata.
+- Snapshot cleanup is based on the metadata that was successfully committed. A dirty→flush→clean→dirty reactivation cancels stale deletion state, and committed snapshot references are never deleted by cleanup.
+- Checkpoints return typed status for durable/no-op, blocked, snapshot-write failure, and metadata-write failure. Failed snapshot or metadata writes remain pending for retry. Runtime failures appear in the status bar.
+- Shutdown succeeds only after recovery is durable/no-op, an explicit Save All succeeds, or the user explicitly chooses **Exit and Abandon Recovery**. Retry repeats the checkpoint and Cancel keeps the application open.
+- Recovery reads explicitly distinguish success (including a valid empty snapshot) from failure. An unreadable snapshot blocks recovery writes for that run, leaves its metadata and snapshot untouched, and cannot be replaced by a blank checkpoint.
+- Restored dirty named and untitled buffers remain logically dirty even when edit+undo reaches Scintilla's restore-time save point. Only a successful explicit Save/Save As clears this recovery-dirty state.
 - Malformed/unsupported metadata, duplicate/invalid identities, and unmanaged snapshot paths produce diagnostics and put recovery in read-only mode for that run. This preserves the original metadata and orphan snapshots rather than normalizing or deleting uncertain data. Missing managed snapshots remain represented and are not replaced with empty files during startup/shutdown.
 - Snapshot paths loaded from metadata must exactly match the SHA-256-derived path under the managed `snapshots/` directory, preventing absolute-path or `..` deletion attacks.
 
@@ -49,11 +58,14 @@ When canonical `session.json` is absent, recovery checks these prior/default can
 
 ```text
 notepad++/sessions
+npp_linux/notepad++/sessions
 Notepad++/notepad++/sessions
 Notepad++/Notepad++ Linux/notepad++/sessions
 ```
 
 The legacy `untitledTabs` / `new_<number>.backup` format is imported into deterministic `legacy-untitled-<number>` identities. Duplicate tab numbers are deduplicated. Imported bytes are copied atomically into canonical snapshots; legacy metadata and backups are never modified or deleted. Malformed or incomplete legacy data is reported and retained.
+
+The same unversioned `untitledTabs` schema is also recognized when it already occupies canonical `session.json`. Before current metadata can replace it, the exact legacy metadata is atomically preserved as `session.legacy.json`; the old backup files remain untouched. Versioned schemas other than schema 2 remain unsupported and write-blocked.
 
 ## Verification
 
@@ -67,18 +79,39 @@ QT_QPA_PLATFORM=offscreen ./build-linux/linux/linux_panel_tests
 QT_QPA_PLATFORM=offscreen ./build-linux/linux/linux_recovery_tests
 ```
 
-Actual results for `23f992221`:
+### Strict red-green evidence
+
+Each slice added its regression before its production change. Commands used the focused target and executable:
+
+```sh
+cmake --build build-linux --target linux_recovery_tests -j2
+QT_QPA_PLATFORM=offscreen ./build-linux/linux/linux_recovery_tests
+```
+
+Durable captured output:
+
+- Slice 1: `/tmp/npp-recovery-slice1-red.txt` failed snapshot existence/latest-byte assertions; `/tmp/npp-recovery-slice1-green.txt` passed.
+- Slice 2: `/tmp/npp-recovery-slice2-red.txt` captured the missing status API compile failure, `/tmp/npp-recovery-slice2-ui-red.txt` failed live visibility and close-cancel assertions, and `/tmp/npp-recovery-slice2-green.txt` passed blocked/snapshot/metadata/retry/UI coverage.
+- Slice 3: `/tmp/npp-recovery-slice3-red.txt` captured the missing explicit read-result API compile failure; `/tmp/npp-recovery-slice3-green.txt` passed empty/unreadable and startup/shutdown preservation coverage.
+- Slice 4: `/tmp/npp-recovery-slice4-red.txt` failed named and untitled edit→undo→restart assertions; `/tmp/npp-recovery-slice4-green.txt` passed.
+- Slice 5: `/tmp/npp-recovery-slice5-red.txt` failed canonical and historical migration assertions; `/tmp/npp-recovery-slice5-green.txt` passed.
+
+### Final verification
+
+Actual results after `07a0d95ec`:
 
 - Configure: succeeded; the existing non-fatal missing CUPS development-files note remains.
 - Clean serial build: `npp_linux`, `linux_panel_tests`, and `linux_recovery_tests` built successfully.
-- CTest: `2/2` passed, `0` failed, in 3.28 seconds.
+- CTest: `2/2` passed, `0` failed, in 3.41 seconds.
 - Focused panel executable: `All Linux panel tests passed`.
 - Focused recovery executable: `All Linux recovery tests passed`.
+- Focused failed-shutdown executable path (`--failed-shutdown-test`): passed.
 - Isolated offscreen smoke: application remained running for 5 seconds.
-- Independent final review: PASS after fixes for managed-path validation, malformed-metadata preservation, missing-snapshot lifecycle safety, and duplicate named-path restoration.
+- `git diff --check`: passed.
+- Independent final review of the complete diff from the mandated starting HEAD: PASS; no blocking/high data-loss issue found.
 - Existing upstream warning remains: `scintilla/src/Editor.cxx` uses a C++20-deprecated implicit `this` capture.
 
-Recovery coverage uses disposable settings/session/file roots and exercises exact Unicode restart for untitled and dirty named buffers; order, active selection, stable identities, and dirty state; Save, Save As, Discard, and Cancel; failed atomic save preservation; missing originals and snapshots; externally changed originals; malformed metadata and orphan retention; hostile snapshot paths; helper-process crash recovery after a real debounced MainWindow checkpoint; and non-destructive legacy migration. Existing panel/replacement tests remain in the same CTest run.
+Recovery coverage uses disposable settings, standard-path, session, and file roots. It exercises exact Unicode restart for untitled and dirty named buffers; order, active selection, stable identities, and dirty state; Save, Save As, Discard, Cancel, Retry, and explicit failed-checkpoint abandonment; blocked/snapshot/metadata write failures; empty, missing, and unreadable snapshots; dirty reactivation; restored edit+undo semantics; failed atomic save preservation; missing/external originals; malformed/unsupported metadata and orphan retention; hostile snapshot paths; helper-process crash recovery after a real debounced MainWindow checkpoint; canonical legacy migration; and historical `npp_linux` discovery. Existing panel/replacement tests remain in the same CTest run.
 
 ## Known limitations / queued work
 
