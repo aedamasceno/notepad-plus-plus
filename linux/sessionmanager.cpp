@@ -181,8 +181,8 @@ bool SessionManager::loadVersion2(const QJsonObject &root)
         document.untitledNumber = object.value(QStringLiteral("untitledNumber")).toInt();
         document.dirty = object.value(QStringLiteral("dirty")).toBool();
         const QString storedSnapshot = object.value(QStringLiteral("snapshot")).toString();
-        const QString expectedSnapshot = relativeSnapshotPath(document.id);
-        if (!storedSnapshot.isEmpty() && storedSnapshot != expectedSnapshot) {
+        if (!storedSnapshot.isEmpty() &&
+            !isManagedSnapshotPath(document.id, storedSnapshot)) {
             m_writesBlocked = true;
             m_diagnostics << QStringLiteral("Rejected unmanaged snapshot path for %1; metadata retained and recovery writes disabled")
                                  .arg(document.id);
@@ -236,7 +236,11 @@ void SessionManager::updateDocument(const DocumentCheckpoint &checkpoint, const 
     document.dirty = checkpoint.dirty;
     document.recoveryState = RecoveryState::Ready;
     if (document.dirty) {
-        document.snapshotPath = relativeSnapshotPath(document.id);
+        const QString oldSnapshot = absoluteSnapshotPath(document);
+        document.snapshotPath = relativeSnapshotPath(document.id, content);
+        if (!oldSnapshot.isEmpty() && oldSnapshot != absoluteSnapshotPath(document) &&
+            QFileInfo::exists(oldSnapshot) && !m_obsoleteSnapshots.contains(oldSnapshot))
+            m_obsoleteSnapshots << oldSnapshot;
         m_obsoleteSnapshots.removeAll(absoluteSnapshotPath(document));
         m_pendingSnapshots.insert(document.id, content);
     } else {
@@ -346,10 +350,39 @@ QString SessionManager::relativeSnapshotPath(const QString &id) const
     return QStringLiteral("snapshots/%1.snapshot").arg(QString::fromLatin1(safeName));
 }
 
+QString SessionManager::relativeSnapshotPath(const QString &id, const QByteArray &content) const
+{
+    const QString legacy = relativeSnapshotPath(id);
+    const QString idHash = legacy.mid(QStringLiteral("snapshots/").size(), 64);
+    const QString contentHash = QString::fromLatin1(
+        QCryptographicHash::hash(content, QCryptographicHash::Sha256).toHex());
+    return QStringLiteral("snapshots/%1-%2.snapshot").arg(idHash, contentHash);
+}
+
+bool SessionManager::isManagedSnapshotPath(const QString &id, const QString &path) const
+{
+    if (path == relativeSnapshotPath(id))
+        return true;
+    const QString idHash = QString::fromLatin1(
+        QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex());
+    const QString prefix = QStringLiteral("snapshots/%1-").arg(idHash);
+    const QString suffix = QStringLiteral(".snapshot");
+    if (!path.startsWith(prefix) || !path.endsWith(suffix))
+        return false;
+    const QString contentHash = path.mid(prefix.size(), path.size() - prefix.size() - suffix.size());
+    if (contentHash.size() != 64)
+        return false;
+    for (const QChar character : contentHash) {
+        if (!character.isDigit() && (character < QLatin1Char('a') || character > QLatin1Char('f')))
+            return false;
+    }
+    return true;
+}
+
 QString SessionManager::absoluteSnapshotPath(const RecoveryDocument &document) const
 {
     if (document.snapshotPath.isEmpty() ||
-        document.snapshotPath != relativeSnapshotPath(document.id))
+        !isManagedSnapshotPath(document.id, document.snapshotPath))
         return {};
     return QDir(m_storageDirectory).filePath(document.snapshotPath);
 }
@@ -483,20 +516,21 @@ bool SessionManager::importLegacyDirectory(const QString &directory)
         const QString oldBackup = old.value(QStringLiteral("backupPath")).toString();
         if (number <= 0 || oldBackup.isEmpty() || seen.contains(number))
             continue;
-        seen.insert(number);
         QFile backup(oldBackup);
         if (!backup.open(QIODevice::ReadOnly)) {
             m_diagnostics << QStringLiteral("Legacy recovery backup is missing; source metadata retained: %1")
                                  .arg(oldBackup);
             continue;
         }
+        seen.insert(number);
         RecoveryDocument document;
         document.id = QStringLiteral("legacy-untitled-%1").arg(number);
         document.untitledNumber = number;
         document.dirty = true;
-        document.snapshotPath = relativeSnapshotPath(document.id);
+        const QByteArray content = backup.readAll();
+        document.snapshotPath = relativeSnapshotPath(document.id, content);
         m_documents.push_back(document);
-        m_pendingSnapshots.insert(document.id, backup.readAll());
+        m_pendingSnapshots.insert(document.id, content);
     }
     const int activeNumber = root.value(QStringLiteral("activeTab")).toInt();
     if (seen.contains(activeNumber))

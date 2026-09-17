@@ -227,6 +227,41 @@ void testCheckpointFailuresReturnStatusAndCanRetry()
            "failed metadata remains dirty and retry becomes durable");
 }
 
+void testMetadataFailureCannotChangeCommittedSnapshotMeaning()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    const QString firstOriginal = root.filePath(QStringLiteral("first.txt"));
+    const QString secondOriginal = root.filePath(QStringLiteral("second.txt"));
+    writeBytes(firstOriginal, "first original");
+    writeBytes(secondOriginal, "second original");
+    const QString id = QStringLiteral("transactional-dirty");
+
+    SessionManager writer(nullptr, sessionDir, 20);
+    writer.loadSession();
+    writer.updateDocument({id, firstOriginal, 0, true}, "committed old snapshot");
+    expect(writer.flush() == CheckpointStatus::Durable,
+           "fixture commits original dirty recovery generation");
+
+    writer.updateDocument({id, secondOriginal, 0, true}, "uncommitted new snapshot");
+    QFile::setPermissions(sessionDir, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    expect(writer.flush() == CheckpointStatus::MetadataWriteFailed,
+           "fixture forces metadata failure after new snapshot succeeds");
+
+    SessionManager restarted(nullptr, sessionDir, 20);
+    restarted.loadSession();
+    const auto committed = restarted.documents();
+    expect(committed.size() == 1 && committed.first().filePath == firstOriginal,
+           "restart sees only committed document metadata after failed transaction");
+    expect(committed.size() == 1 &&
+               restarted.readRecoveryContent(committed.first()).content ==
+                   QByteArrayLiteral("committed old snapshot"),
+           "committed metadata still resolves to its matching snapshot bytes");
+
+    QFile::setPermissions(sessionDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                          QFileDevice::ExeOwner);
+}
+
 void testUnreadableSnapshotIsNotTreatedAsEmpty()
 {
     QTemporaryDir root;
@@ -427,6 +462,45 @@ void testMalformedMetadataMissingBackupAndOrphanPreservation()
     qunsetenv("NPP_SESSION_DIR");
 }
 
+void testMissingSnapshotCloseRequiresExplicitDecision()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    QDir().mkpath(sessionDir);
+    const QString id = QStringLiteral("missing-close");
+    const QString missingSnapshot = QStringLiteral("snapshots/%1.snapshot").arg(
+        QString::fromLatin1(QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256)
+                                .toHex()));
+    const QByteArray metadata = QJsonDocument(
+        QJsonObject{{QStringLiteral("schemaVersion"), 2},
+                    {QStringLiteral("activeDocumentId"), id},
+                    {QStringLiteral("documents"),
+                     QJsonArray{QJsonObject{{QStringLiteral("id"), id},
+                                            {QStringLiteral("dirty"), true},
+                                            {QStringLiteral("untitledNumber"), 1},
+                                            {QStringLiteral("snapshot"), missingSnapshot}}}}})
+                                    .toJson(QJsonDocument::Compact);
+    writeBytes(sessionDir + QStringLiteral("/session.json"), metadata);
+
+    qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
+    QMainWindow *window = createMainWindow();
+    auto *tabs = window->findChild<QTabWidget *>();
+    expect(tabs->count() == 1 && tabs->tabText(0).endsWith(QLatin1Char('*')),
+           "missing snapshot restores as visibly dirty protected tab");
+
+    chooseMessageBox(QMessageBox::Cancel);
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 0));
+    expect(tabs->count() == 1, "cancel keeps missing-snapshot tab open");
+    const auto retained = window->findChild<SessionManager *>()->documents();
+    expect(retained.size() == 1 && retained.first().id == id,
+           "cancel keeps missing-snapshot recovery metadata");
+
+    window->close();
+    delete window;
+    qunsetenv("NPP_SESSION_DIR");
+}
+
 void testUnmanagedSnapshotPathCannotDeleteFiles()
 {
     QTemporaryDir root;
@@ -475,6 +549,36 @@ void testLegacyMigrationKeepsSourceAndDeduplicates()
     SessionManager again(nullptr, canonical, 20, {legacy});
     again.loadSession();
     expect(again.documents().size() == 1, "legacy migration remains deduplicated on restart");
+}
+
+void testLegacyDedupeWaitsForReadableBackup()
+{
+    QTemporaryDir root;
+    const QString canonical = root.filePath(QStringLiteral("canonical"));
+    const QString legacy = root.filePath(QStringLiteral("legacy"));
+    QDir().mkpath(legacy);
+    const QString readable = legacy + QStringLiteral("/readable.backup");
+    writeBytes(readable, "later readable duplicate");
+    const QJsonObject missing{{QStringLiteral("tabNumber"), 5},
+                              {QStringLiteral("backupPath"),
+                               legacy + QStringLiteral("/missing.backup")}};
+    const QJsonObject valid{{QStringLiteral("tabNumber"), 5},
+                            {QStringLiteral("backupPath"), readable}};
+    writeBytes(legacy + QStringLiteral("/session.json"),
+               QJsonDocument(QJsonObject{{QStringLiteral("activeTab"), 5},
+                                         {QStringLiteral("untitledTabs"),
+                                          QJsonArray{missing, valid}}})
+                   .toJson());
+
+    SessionManager manager(nullptr, canonical, 20, {legacy});
+    manager.loadSession();
+    const auto documents = manager.documents();
+    expect(documents.size() == 1,
+           "missing legacy duplicate does not suppress later readable backup");
+    expect(documents.size() == 1 &&
+               manager.readRecoveryContent(documents.first()).content ==
+                   QByteArrayLiteral("later readable duplicate"),
+           "legacy migration imports later readable duplicate bytes");
 }
 
 void testCanonicalLegacyMigrationPreservesSource()
@@ -800,12 +904,15 @@ int main(int argc, char **argv)
     testSessionRoundTripAndConflictDiagnostics();
     testDirtySnapshotReactivationKeepsLatestBytes();
     testCheckpointFailuresReturnStatusAndCanRetry();
+    testMetadataFailureCannotChangeCommittedSnapshotMeaning();
     testUnreadableSnapshotIsNotTreatedAsEmpty();
     testRecoveredDirtyUndoCannotBecomeClean();
     testFailedShutdownStaysOpenAndOffersRetry();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
+    testMissingSnapshotCloseRequiresExplicitDecision();
     testUnmanagedSnapshotPathCannotDeleteFiles();
     testLegacyMigrationKeepsSourceAndDeduplicates();
+    testLegacyDedupeWaitsForReadableBackup();
     testCanonicalLegacyMigrationPreservesSource();
     testHistoricalNppLinuxLocationDiscovery();
     testAtomicOrdinarySaveFailurePreservesOriginal();

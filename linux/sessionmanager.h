@@ -90,6 +90,8 @@ private:
     QStringList defaultLegacyDirectories() const;
     QString absoluteSnapshotPath(const RecoveryDocument &document) const;
     QString relativeSnapshotPath(const QString &id) const;
+    QString relativeSnapshotPath(const QString &id, const QByteArray &content) const;
+    bool isManagedSnapshotPath(const QString &id, const QString &path) const;
     int indexOf(const QString &id) const;
     void captureOriginalMetadata(RecoveryDocument &document);
     void assessRecoveryState(RecoveryDocument &document);

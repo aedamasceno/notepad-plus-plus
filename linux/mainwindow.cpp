@@ -1617,8 +1617,8 @@ void MainWindow::loadSession() {
             tab->getEditor()->send(SCI_SETTEXT, 0,
                                    reinterpret_cast<sptr_t>(read.content.constData()));
             tab->getEditor()->send(SCI_SETSAVEPOINT);
-            tab->setRecoveredDirty(document.dirty);
         }
+        tab->setRecoveredDirty(document.dirty);
         QString warning;
         switch (document.recoveryState) {
         case RecoveryState::OriginalMissing:
