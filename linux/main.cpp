@@ -585,7 +585,7 @@ private:
     void setupActions();
     void updateWindowTitle();
     bool loadFile(const QString &filePath);
-    bool saveFileToPath(const QString &filePath, DocumentTab* tab = nullptr);
+    bool saveFileToPath(const QString &filePath, DocumentTab *tab);
     bool saveTab(DocumentTab *tab, bool forceSaveAs = false);
     void createNewTab(const QString& filePath = "");
     int findTabIndexForFilePath(const QString& filePath);
@@ -1480,11 +1480,6 @@ bool MainWindow::loadFile(const QString &filePath) {
 }
 
 bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab) {
-    // If no specific tab is provided, use the current tab
-    if (!tab) {
-        tab = getCurrentTab();
-    }
-
     if (!tab) return false;
 
     QString error;
