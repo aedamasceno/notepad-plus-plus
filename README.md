@@ -85,7 +85,7 @@ cmake --build build-linux -j$(nproc)
 Run the application with:
 
 ```bash
-./build-linux/npp_linux
+./build-linux/linux/npp_linux
 ```
 
 ## Development Approach

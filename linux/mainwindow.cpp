@@ -10,6 +10,7 @@
 #include <QTextStream>
 #include <QtPrintSupport/QPrinter>
 #include <QtPrintSupport/QPrintDialog>
+#include "printhelper.h"
 #include <QDockWidget>
 #include <QFileSystemModel>
 #include <QTreeView>
@@ -858,6 +859,7 @@ void MainWindow::setupActions() {
     fileMenu->addAction(saveAction);
     fileMenu->addAction(saveAsAction);
     fileMenu->addAction(saveAllAction);  // Add Save All to File menu
+    fileMenu->addAction(printAction);
     fileMenu->addSeparator();
     fileMenu->addAction(closeAction);    // Add Close to File menu
     fileMenu->addAction(closeAllAction); // Add Close All to File menu
@@ -942,6 +944,7 @@ void MainWindow::setupActions() {
     closeAllAction->setToolTip("Close All");
     saveAllAction->setToolTip("Save All");
     printAction->setToolTip("Print");
+    printAction->setShortcut(QKeySequence::Print);
     zoomInAction->setToolTip("Zoom In");
     zoomOutAction->setToolTip("Zoom Out");
     wordWrapAction->setToolTip("Word Wrap");
@@ -973,7 +976,7 @@ void MainWindow::setupActions() {
     indentGuideAction->setCheckable(true);
 
     // Disable unimplemented actions
-    printAction->setEnabled(false);
+    printAction->setEnabled(true);
     for (QAction *panelAction : {functionListAction, documentMapAction,
                                  fileBrowserAction, documentListAction}) {
         panelAction->setEnabled(true);
@@ -1850,30 +1853,16 @@ void MainWindow::printFile() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
 
+    ScintillaEditBase *editor = currentTab->getEditor();
     QPrinter printer(QPrinter::HighResolution);
     QPrintDialog dialog(&printer, this);
-
-    // This is a demonstration that we can reach print functionality -
-    // actual implementation would be much more complex for document printing
+    dialog.setOption(QAbstractPrintDialog::PrintSelection,
+                     editor->send(SCI_GETSELECTIONSTART) !=
+                         editor->send(SCI_GETSELECTIONEND));
 
     if (dialog.exec() == QDialog::Accepted) {
-        // Actual printing would happen here using Scintilla
-        QMessageBox msg(this);
-        msg.setWindowTitle("Print");
-        msg.setText("Print dialog accepted (in complete implementation this would print actual document content)");
-        msg.setIcon(QMessageBox::Information);
-        msg.exec();
-
-        // Would need to implement:
-        // editor->send(SCI_GETTEXTLENGTH);
-        // And then iterate through text and send to printer
-        // This requires much more complex Scintilla integration
-    } else {
-        QMessageBox msg(this);
-        msg.setWindowTitle("Print");
-        msg.setText("Print dialog cancelled (would not print)");
-        msg.setIcon(QMessageBox::Information);
-        msg.exec();
+        if (!PrintHelper::printScintillaDocument(editor, printer))
+            QMessageBox::warning(this, tr("Print Error"), tr("Failed to print document."));
     }
 }
 
