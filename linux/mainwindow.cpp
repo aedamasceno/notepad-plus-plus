@@ -6,6 +6,8 @@
 #include <QAction>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QFile>
 #include <QTextStream>
 #include <QtPrintSupport/QPrinter>
@@ -37,6 +39,7 @@
 #include "filebrowser.h"
 #include "documentmap.h"
 #include "editorutils.h"
+#include "macromanager.h"
 
 // Include Scintilla ILexer header before Lexilla.h
 #include "ILexer.h"
@@ -493,6 +496,7 @@ class MainWindow : public QMainWindow {
 
 public:
     MainWindow(QWidget *parent = nullptr) : QMainWindow(parent), nextUntitledNumber(1) {
+        m_macroManager = new MacroManager(this);
         setupUI();
         setupActions();
         m_panelContentTimer.setSingleShot(true);
@@ -593,6 +597,8 @@ private:
     void refreshPanelViewport();
     void schedulePanelContentRefresh();
     void navigateToLine(int line);
+    void updateMacroActions();
+    void rebuildSavedMacroMenu();
 
     // Session management
     CheckpointStatus saveSession();
@@ -612,6 +618,7 @@ private:
     QMenu *settingsMenu;
     QMenu *toolsMenu;
     QMenu *macroMenu;
+    QMenu *savedMacroMenu;
     QMenu *runMenu;
     QMenu *pluginsMenu;
     QMenu *windowMenu;
@@ -674,6 +681,7 @@ private:
     DocumentList* documentListWidget = nullptr;
     QTimer m_panelContentTimer;
     QString m_sessionDiagnostics;
+    MacroManager *m_macroManager = nullptr;
 };
 
 void MainWindow::setupUI() {
@@ -718,6 +726,9 @@ void MainWindow::setupUI() {
 
     // Macro menu
     macroMenu = menuBar->addMenu("&Macro");
+    macroMenu->setObjectName(QStringLiteral("macroMenu"));
+    savedMacroMenu = macroMenu->addMenu("Saved Macros");
+    savedMacroMenu->setObjectName(QStringLiteral("savedMacroMenu"));
 
     // Run menu
     runMenu = menuBar->addMenu("&Run");
@@ -767,6 +778,7 @@ void MainWindow::setupUI() {
 void MainWindow::setupActions() {
     // File actions
     newAction = new QAction("&New", this);
+    newAction->setObjectName(QStringLiteral("newAction"));
     openAction = new QAction("&Open", this);
     saveAction = new QAction("&Save", this);
     saveAsAction = new QAction("Save &As", this);
@@ -799,10 +811,15 @@ void MainWindow::setupActions() {
     fileBrowserAction = new QAction("File Browser", this);
     documentListAction = new QAction("Document List", this);
     startMacroRecordingAction = new QAction("Start Macro Recording", this);
+    startMacroRecordingAction->setObjectName(QStringLiteral("macroStartAction"));
     stopMacroRecordingAction = new QAction("Stop Macro Recording", this);
+    stopMacroRecordingAction->setObjectName(QStringLiteral("macroStopAction"));
     playMacroAction = new QAction("Play Macro", this);
+    playMacroAction->setObjectName(QStringLiteral("macroPlayAction"));
     runMacroMultipleTimesAction = new QAction("Run Macro Multiple Times", this);
+    runMacroMultipleTimesAction->setObjectName(QStringLiteral("macroRepeatAction"));
     saveMacroAction = new QAction("Save Macro", this);
+    saveMacroAction->setObjectName(QStringLiteral("macroSaveAction"));
     syncVerticalAction = new QAction("Sync Vertical", this);
     syncHorizontalAction = new QAction("Sync Horizontal", this);
 
@@ -846,6 +863,10 @@ void MainWindow::setupActions() {
     connect(playMacroAction, &QAction::triggered, this, &MainWindow::playMacro);
     connect(runMacroMultipleTimesAction, &QAction::triggered, this, &MainWindow::runMacroMultipleTimes);
     connect(saveMacroAction, &QAction::triggered, this, &MainWindow::saveMacro);
+    connect(m_macroManager, &MacroManager::stateChanged,
+            this, &MainWindow::updateMacroActions);
+    connect(m_macroManager, &MacroManager::savedMacrosChanged,
+            this, &MainWindow::rebuildSavedMacroMenu);
     connect(syncVerticalAction, &QAction::triggered, this, &MainWindow::syncVertical);
     connect(syncHorizontalAction, &QAction::triggered, this, &MainWindow::syncHorizontal);
 
@@ -877,6 +898,14 @@ void MainWindow::setupActions() {
 
     searchMenu->addAction(findAction);
     searchMenu->addAction(replaceAction);
+
+    macroMenu->insertAction(savedMacroMenu->menuAction(), startMacroRecordingAction);
+    macroMenu->insertAction(savedMacroMenu->menuAction(), stopMacroRecordingAction);
+    macroMenu->insertSeparator(savedMacroMenu->menuAction());
+    macroMenu->insertAction(savedMacroMenu->menuAction(), playMacroAction);
+    macroMenu->insertAction(savedMacroMenu->menuAction(), runMacroMultipleTimesAction);
+    macroMenu->insertAction(savedMacroMenu->menuAction(), saveMacroAction);
+    macroMenu->insertSeparator(savedMacroMenu->menuAction());
 
     // Add actions to toolbar - use the member variable instead of findChild
     toolBar->addAction(newAction);
@@ -991,11 +1020,8 @@ void MainWindow::setupActions() {
             fileBrowserAction, &QAction::setChecked);
     connect(documentListWidget, &QDockWidget::visibilityChanged,
             documentListAction, &QAction::setChecked);
-    startMacroRecordingAction->setEnabled(false);
-    stopMacroRecordingAction->setEnabled(false);
-    playMacroAction->setEnabled(false);
-    runMacroMultipleTimesAction->setEnabled(false);
-    saveMacroAction->setEnabled(false);
+    rebuildSavedMacroMenu();
+    updateMacroActions();
     syncVerticalAction->setEnabled(false);
     syncHorizontalAction->setEnabled(false);
 
@@ -1225,6 +1251,7 @@ void MainWindow::tabChanged(int index) {
     updateEditActionsEnabled();
     updateStatusBar();
     refreshPanels();
+    updateMacroActions();
 
     // Update word wrap action state to match current tab
     DocumentTab* currentTab = getCurrentTab();
@@ -1891,48 +1918,81 @@ void MainWindow::documentList() {
 }
 
 void MainWindow::startMacroRecording() {
-    // Show that we're properly handling macro recording functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Start Macro");
-    msg.setText("Macro recording initialized (would record editor operations)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    DocumentTab *tab = getCurrentTab();
+    m_macroManager->startRecording(tab ? tab->getEditor() : nullptr);
 }
 
 void MainWindow::stopMacroRecording() {
-    // Show that we're properly handling macro stopping functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Stop Macro");
-    msg.setText("Macro recording stopped (would save and finalize the recorded operations)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    m_macroManager->stopRecording();
 }
 
 void MainWindow::playMacro() {
-    // Show that we're properly handling macro playback functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Play Macro");
-    msg.setText("Macro playback initialized (would execute recorded editor operations)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    DocumentTab *tab = getCurrentTab();
+    m_macroManager->play(tab ? tab->getEditor() : nullptr);
 }
 
 void MainWindow::runMacroMultipleTimes() {
-    // Show that we're properly handling multiple macro execution functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Run Macro Multiple Times");
-    msg.setText("Multiple macro execution initialized (would replay recorded macro N times)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    bool accepted = false;
+    const int repeats = QInputDialog::getInt(this, tr("Run Macro Multiple Times"),
+                                             tr("Number of repetitions:"), 1, 1, 10000, 1,
+                                             &accepted);
+    if (!accepted)
+        return;
+    DocumentTab *tab = getCurrentTab();
+    m_macroManager->play(tab ? tab->getEditor() : nullptr, repeats);
 }
 
 void MainWindow::saveMacro() {
-    // Show that we're properly handling macro saving functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Save Macro");
-    msg.setText("Macro save initialized (would save recorded macro to file)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    bool accepted = false;
+    const QString name = QInputDialog::getText(this, tr("Save Macro"), tr("Macro name:"),
+                                               QLineEdit::Normal, {}, &accepted).trimmed();
+    if (!accepted || name.isEmpty())
+        return;
+    bool overwrite = false;
+    if (m_macroManager->savedMacroNames().contains(name)) {
+        overwrite = QMessageBox::question(this, tr("Overwrite Macro"),
+            tr("A macro named ‘%1’ already exists. Overwrite it?").arg(name),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes;
+        if (!overwrite)
+            return;
+    }
+    if (!m_macroManager->saveCurrent(name, overwrite))
+        QMessageBox::warning(this, tr("Save Macro"),
+                             tr("The macro could not be saved."));
+}
+
+void MainWindow::updateMacroActions()
+{
+    const bool hasEditor = getCurrentTab() != nullptr;
+    const bool recording = m_macroManager->isRecording();
+    const bool playing = m_macroManager->isPlaying();
+    const bool usable = m_macroManager->hasCurrentMacro() && hasEditor && !recording && !playing;
+    startMacroRecordingAction->setEnabled(hasEditor && !recording && !playing);
+    stopMacroRecordingAction->setEnabled(recording);
+    playMacroAction->setEnabled(usable);
+    runMacroMultipleTimesAction->setEnabled(usable);
+    saveMacroAction->setEnabled(m_macroManager->hasCurrentMacro() && !recording && !playing);
+    savedMacroMenu->setEnabled(!recording && !playing && !m_macroManager->savedMacroNames().isEmpty());
+}
+
+void MainWindow::rebuildSavedMacroMenu()
+{
+    savedMacroMenu->clear();
+    for (const QString &name : m_macroManager->savedMacroNames()) {
+        QAction *action = savedMacroMenu->addAction(name);
+        action->setObjectName(QStringLiteral("savedMacro:") + name);
+        connect(action, &QAction::triggered, this, [this, name] {
+            if (!m_macroManager->selectSaved(name))
+                return;
+            DocumentTab *tab = getCurrentTab();
+            m_macroManager->play(tab ? tab->getEditor() : nullptr);
+        });
+    }
+    if (savedMacroMenu->isEmpty()) {
+        QAction *empty = savedMacroMenu->addAction(tr("(No saved macros)"));
+        empty->setEnabled(false);
+    }
+    updateMacroActions();
 }
 
 void MainWindow::syncVertical() {
