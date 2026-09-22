@@ -462,6 +462,107 @@ void testMalformedMetadataMissingBackupAndOrphanPreservation()
     qunsetenv("NPP_SESSION_DIR");
 }
 
+void testDualViewSchemaMigrationAndValidation()
+{
+    QTemporaryDir root;
+    const auto document = [](const QString &id, int untitledNumber) {
+        return QJsonObject{{QStringLiteral("id"), id},
+                           {QStringLiteral("untitledNumber"), untitledNumber},
+                           {QStringLiteral("dirty"), false}};
+    };
+    const QJsonArray documents{document(QStringLiteral("a"), 1),
+                               document(QStringLiteral("b"), 2)};
+
+    const QString schema2Dir = root.filePath(QStringLiteral("schema2"));
+    QDir().mkpath(schema2Dir);
+    writeBytes(schema2Dir + QStringLiteral("/session.json"), QJsonDocument(QJsonObject{
+        {QStringLiteral("schemaVersion"), 2}, {QStringLiteral("activeDocumentId"), QStringLiteral("b")},
+        {QStringLiteral("documents"), documents}}).toJson());
+    SessionManager migrated(nullptr, schema2Dir, 20); migrated.loadSession();
+    expect(!migrated.writesBlocked() && migrated.primaryDocumentIds() == QStringList({"a", "b"}) &&
+               migrated.secondaryDocumentIds().isEmpty() && migrated.activePane() == QStringLiteral("primary"),
+           "schema 2 sessions migrate to a valid single-primary-pane layout");
+
+    const QList<QJsonObject> invalidDuals{
+        {{QStringLiteral("primary"), QJsonArray{"a", "a"}},
+         {QStringLiteral("secondary"), QJsonArray{"b"}}, {QStringLiteral("activePane"), "primary"},
+         {QStringLiteral("orientation"), "horizontal"}, {QStringLiteral("sizes"), QJsonArray{1, 1}}},
+        {{QStringLiteral("primary"), QJsonArray{"a"}}, {QStringLiteral("secondary"), QJsonArray{"b"}},
+         {QStringLiteral("activePane"), "primary"}, {QStringLiteral("orientation"), "diagonal"},
+         {QStringLiteral("sizes"), QJsonArray{1, 1}}},
+        {{QStringLiteral("primary"), QJsonArray{"a"}}, {QStringLiteral("secondary"), QJsonArray{"b"}},
+         {QStringLiteral("activePane"), "primary"}, {QStringLiteral("orientation"), "horizontal"},
+         {QStringLiteral("sizes"), QJsonArray{1}}},
+        {{QStringLiteral("primary"), QJsonArray{"a"}}, {QStringLiteral("secondary"), QJsonArray{"b"}},
+         {QStringLiteral("activePane"), "secondary"}, {QStringLiteral("orientation"), "horizontal"},
+         {QStringLiteral("sizes"), QJsonArray{1, 1}}},
+        {{QStringLiteral("primary"), QJsonArray{"a"}}, {QStringLiteral("secondary"), QJsonArray{}},
+         {QStringLiteral("activePane"), "primary"}, {QStringLiteral("orientation"), "horizontal"},
+         {QStringLiteral("sizes"), QJsonArray{1, 1}}}
+    };
+    for (int i = 0; i < invalidDuals.size(); ++i) {
+        const QString directory = root.filePath(QStringLiteral("invalid-%1").arg(i));
+        QDir().mkpath(directory);
+        writeBytes(directory + QStringLiteral("/session.json"), QJsonDocument(QJsonObject{
+            {QStringLiteral("schemaVersion"), 3}, {QStringLiteral("activeDocumentId"), QStringLiteral("a")},
+            {QStringLiteral("documents"), documents}, {QStringLiteral("dualView"), invalidDuals.at(i)}}).toJson());
+        SessionManager malformed(nullptr, directory, 20); malformed.loadSession();
+        expect(malformed.writesBlocked() && !malformed.diagnostics().isEmpty(),
+               "malformed schema-3 dual-view metadata is rejected conservatively");
+        malformed.updateDocument({QStringLiteral("new"), {}, 3, true}, "must not write");
+        expect(malformed.flush() == CheckpointStatus::WritesBlocked,
+               "malformed schema-3 pane assignment blocks subsequent writes");
+    }
+
+    const QString removalDir = root.filePath(QStringLiteral("remove-layout"));
+    SessionManager removal(nullptr, removalDir, 20);
+    removal.updateDocument({QStringLiteral("a"), {}, 1, false}, {});
+    removal.updateDocument({QStringLiteral("b"), {}, 2, false}, {});
+    removal.setDualViewLayout({QStringLiteral("a"), QStringLiteral("b")},
+                              {QStringLiteral("a")}, QStringLiteral("primary"),
+                              Qt::Horizontal, {1, 1});
+    removal.removeDocument(QStringLiteral("a"));
+    expect(removal.primaryDocumentIds() == QStringList{QStringLiteral("b")} &&
+               removal.secondaryDocumentIds().isEmpty(),
+           "removing a document defensively purges both pane assignment lists");
+
+    const QList<QPair<int, QJsonArray>> invalidUntitled{
+        {2, QJsonArray{document(QStringLiteral("zero"), 0)}},
+        {2, QJsonArray{document(QStringLiteral("dup-a"), 4), document(QStringLiteral("dup-b"), 4)}},
+        {3, QJsonArray{document(QStringLiteral("zero"), -1)}},
+        {3, QJsonArray{document(QStringLiteral("dup-a"), 6), document(QStringLiteral("dup-b"), 6)}}
+    };
+    for (int i = 0; i < invalidUntitled.size(); ++i) {
+        const int schema = invalidUntitled.at(i).first;
+        const QJsonArray invalidDocuments = invalidUntitled.at(i).second;
+        QJsonObject metadata{{QStringLiteral("schemaVersion"), schema},
+                             {QStringLiteral("activeDocumentId"),
+                              invalidDocuments.first().toObject().value(QStringLiteral("id"))},
+                             {QStringLiteral("documents"), invalidDocuments}};
+        if (schema == 3) {
+            QJsonArray ids;
+            for (const QJsonValue &value : invalidDocuments)
+                ids.append(value.toObject().value(QStringLiteral("id")));
+            metadata.insert(QStringLiteral("dualView"), QJsonObject{
+                {QStringLiteral("primary"), ids}, {QStringLiteral("secondary"), QJsonArray{}},
+                {QStringLiteral("activePane"), QStringLiteral("primary")},
+                {QStringLiteral("orientation"), QStringLiteral("horizontal")},
+                {QStringLiteral("sizes"), QJsonArray{1, 1}}});
+        }
+        const QString directory = root.filePath(QStringLiteral("invalid-untitled-%1").arg(i));
+        QDir().mkpath(directory);
+        const QByteArray original = QJsonDocument(metadata).toJson();
+        const QString path = directory + QStringLiteral("/session.json");
+        writeBytes(path, original);
+        SessionManager malformed(nullptr, directory, 20); malformed.loadSession();
+        expect(malformed.writesBlocked() && malformed.flush() == CheckpointStatus::WritesBlocked,
+               "schema 2 and 3 reject non-positive or duplicate untitled numbers");
+        QFile retained(path);
+        expect(retained.open(QIODevice::ReadOnly) && retained.readAll() == original,
+               "invalid untitled metadata is preserved without destructive rewrite");
+    }
+}
+
 void testMetadataOpenFailureBlocksWritesAndPreservesObject()
 {
     QTemporaryDir root;
@@ -1028,6 +1129,7 @@ int main(int argc, char **argv)
     testRecoveredDirtyUndoCannotBecomeClean();
     testFailedShutdownStaysOpenAndOffersRetry();
     testMalformedMetadataMissingBackupAndOrphanPreservation();
+    testDualViewSchemaMigrationAndValidation();
     testMetadataOpenFailureBlocksWritesAndPreservesObject();
     testMissingSnapshotCloseRequiresExplicitDecision();
     testUnmanagedSnapshotPathCannotDeleteFiles();

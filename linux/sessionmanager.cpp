@@ -143,13 +143,99 @@ void SessionManager::loadSession()
         }
         return;
     }
-    if (root.value(QStringLiteral("schemaVersion")).toInt() != SchemaVersion) {
+    const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt();
+    if (schemaVersion != 2 && schemaVersion != SchemaVersion) {
         m_writesBlocked = true;
         m_diagnostics << QStringLiteral("Unsupported session schema retained at %1; recovery writes are disabled")
                              .arg(m_sessionFilePath);
         return;
     }
-    loadVersion2(root);
+    if (schemaVersion == 2) {
+        if (loadVersion2(root)) {
+            for (const RecoveryDocument &document : std::as_const(m_documents))
+                m_primaryDocumentIds << document.id;
+            m_activePane = QStringLiteral("primary");
+            m_splitterOrientation = Qt::Horizontal;
+            m_splitterSizes.clear();
+        }
+    } else
+        loadVersion3(root);
+}
+
+bool SessionManager::loadVersion3(const QJsonObject &root)
+{
+    if (!loadVersion2(root)) return false;
+    const QJsonValue dualValue = root.value(QStringLiteral("dualView"));
+    if (!dualValue.isObject()) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view session metadata is malformed; metadata retained and recovery writes disabled");
+        return false;
+    }
+    const QJsonObject dual = dualValue.toObject();
+    auto readIds = [this](const QJsonValue &value, QStringList &out) {
+        if (!value.isArray()) return false;
+        QSet<QString> valid; for (const auto &document : m_documents) valid.insert(document.id);
+        QSet<QString> seen;
+        for (const QJsonValue &entry : value.toArray()) {
+            if (!entry.isString() || !valid.contains(entry.toString()) || seen.contains(entry.toString()))
+                return false;
+            seen.insert(entry.toString());
+            out << entry.toString();
+        }
+        return true;
+    };
+    if (!readIds(dual.value(QStringLiteral("primary")), m_primaryDocumentIds) ||
+        !readIds(dual.value(QStringLiteral("secondary")), m_secondaryDocumentIds)) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view pane assignments are malformed; metadata retained and recovery writes disabled");
+        return false;
+    }
+    QSet<QString> recoveredIds;
+    for (const RecoveryDocument &document : std::as_const(m_documents))
+        recoveredIds.insert(document.id);
+    QSet<QString> assignedIds(m_primaryDocumentIds.cbegin(), m_primaryDocumentIds.cend());
+    assignedIds.unite(QSet<QString>(m_secondaryDocumentIds.cbegin(), m_secondaryDocumentIds.cend()));
+    if (assignedIds != recoveredIds) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view pane assignments are incomplete; metadata retained and recovery writes disabled");
+        return false;
+    }
+    m_activePane = dual.value(QStringLiteral("activePane")).toString();
+    if (m_activePane != QStringLiteral("primary") && m_activePane != QStringLiteral("secondary")) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view active pane is malformed; metadata retained and recovery writes disabled");
+        return false;
+    }
+    const QString orientation = dual.value(QStringLiteral("orientation")).toString();
+    if (orientation != QStringLiteral("horizontal") && orientation != QStringLiteral("vertical")) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view orientation is malformed; metadata retained and recovery writes disabled");
+        return false;
+    }
+    m_splitterOrientation = orientation == QStringLiteral("vertical") ? Qt::Vertical : Qt::Horizontal;
+    const QJsonValue sizesValue = dual.value(QStringLiteral("sizes"));
+    if (!sizesValue.isArray() ||
+        (sizesValue.toArray().size() != 0 && sizesValue.toArray().size() != 2)) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view splitter sizes are malformed; metadata retained and recovery writes disabled");
+        return false;
+    }
+    for (const QJsonValue &size : sizesValue.toArray()) {
+        if (!size.isDouble() || size.toInt() < 0) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Dual-view splitter sizes are malformed; metadata retained and recovery writes disabled");
+            return false;
+        }
+        m_splitterSizes << size.toInt();
+    }
+    const QStringList &activeIds = m_activePane == QStringLiteral("primary")
+                                       ? m_primaryDocumentIds : m_secondaryDocumentIds;
+    if (!m_activeDocumentId.isEmpty() && !activeIds.contains(m_activeDocumentId)) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Dual-view active document assignment is malformed; metadata retained and recovery writes disabled");
+        return false;
+    }
+    return true;
 }
 
 bool SessionManager::loadVersion2(const QJsonObject &root)
@@ -163,6 +249,7 @@ bool SessionManager::loadVersion2(const QJsonObject &root)
     }
 
     QSet<QString> seen;
+    QSet<int> untitledNumbers;
     for (const QJsonValue &value : documentsValue.toArray()) {
         if (!value.isObject()) {
             m_writesBlocked = true;
@@ -180,6 +267,14 @@ bool SessionManager::loadVersion2(const QJsonObject &root)
         seen.insert(document.id);
         document.filePath = object.value(QStringLiteral("filePath")).toString();
         document.untitledNumber = object.value(QStringLiteral("untitledNumber")).toInt();
+        if (document.filePath.isEmpty()) {
+            if (document.untitledNumber <= 0 || untitledNumbers.contains(document.untitledNumber)) {
+                m_writesBlocked = true;
+                m_diagnostics << QStringLiteral("Rejected non-positive or duplicate untitled document number; metadata retained and recovery writes disabled");
+            } else {
+                untitledNumbers.insert(document.untitledNumber);
+            }
+        }
         document.dirty = object.value(QStringLiteral("dirty")).toBool();
         const QString storedSnapshot = object.value(QStringLiteral("snapshot")).toString();
         if (!storedSnapshot.isEmpty() &&
@@ -223,6 +318,9 @@ void SessionManager::updateDocument(const DocumentCheckpoint &checkpoint, const 
         document.dirty = checkpoint.dirty;
         captureOriginalMetadata(document);
         m_documents.push_back(document);
+        if (!m_primaryDocumentIds.contains(document.id) &&
+            !m_secondaryDocumentIds.contains(document.id))
+            m_primaryDocumentIds << document.id;
         index = m_documents.size() - 1;
     }
     RecoveryDocument &document = m_documents[index];
@@ -260,9 +358,17 @@ void SessionManager::removeDocument(const QString &id)
 {
     if (m_writesBlocked)
         return;
+    const bool removedFromPrimary = m_primaryDocumentIds.removeAll(id) > 0;
+    const bool removedFromSecondary = m_secondaryDocumentIds.removeAll(id) > 0;
+    const bool layoutChanged = removedFromPrimary || removedFromSecondary;
     const int index = indexOf(id);
-    if (index < 0)
+    if (index < 0) {
+        if (layoutChanged) {
+            m_metadataDirty = true;
+            scheduleCheckpoint();
+        }
         return;
+    }
     const QString snapshot = absoluteSnapshotPath(m_documents[index]);
     m_documents.removeAt(index);
     m_pendingSnapshots.remove(id);
@@ -295,6 +401,22 @@ void SessionManager::setSessionLayout(const QStringList &orderedIds, const QStri
     }
     m_documents = ordered;
     m_activeDocumentId = activeId;
+    m_metadataDirty = true;
+    scheduleCheckpoint();
+}
+
+void SessionManager::setDualViewLayout(const QStringList &primaryIds,
+                                       const QStringList &secondaryIds,
+                                       const QString &activePane,
+                                       Qt::Orientation orientation,
+                                       const QList<int> &splitterSizes)
+{
+    if (m_writesBlocked) return;
+    m_primaryDocumentIds = primaryIds;
+    m_secondaryDocumentIds = secondaryIds;
+    m_activePane = activePane == QStringLiteral("secondary") ? activePane : QStringLiteral("primary");
+    m_splitterOrientation = orientation;
+    m_splitterSizes = splitterSizes;
     m_metadataDirty = true;
     scheduleCheckpoint();
 }
@@ -464,6 +586,14 @@ CheckpointStatus SessionManager::writeCheckpoint()
     root.insert(QStringLiteral("schemaVersion"), SchemaVersion);
     root.insert(QStringLiteral("activeDocumentId"), m_activeDocumentId);
     root.insert(QStringLiteral("documents"), documents);
+    QJsonArray primary; for (const QString &id : m_primaryDocumentIds) primary.append(id);
+    QJsonArray secondary; for (const QString &id : m_secondaryDocumentIds) secondary.append(id);
+    QJsonArray sizes; for (int size : m_splitterSizes) sizes.append(size);
+    root.insert(QStringLiteral("dualView"), QJsonObject{
+        {QStringLiteral("primary"), primary}, {QStringLiteral("secondary"), secondary},
+        {QStringLiteral("activePane"), m_activePane},
+        {QStringLiteral("orientation"), m_splitterOrientation == Qt::Vertical ? QStringLiteral("vertical") : QStringLiteral("horizontal")},
+        {QStringLiteral("sizes"), sizes}});
     root.insert(QStringLiteral("checkpointIntervalMs"), m_checkpointTimer.interval());
     QString error;
     if (!writeAtomic(m_sessionFilePath, QJsonDocument(root).toJson(), &error)) {

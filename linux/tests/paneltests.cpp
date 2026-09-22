@@ -387,6 +387,8 @@ int main(int argc, char **argv)
 {
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
+    QTemporaryDir sessionDirectory;
+    qputenv("NPP_SESSION_DIR", sessionDirectory.path().toUtf8());
     testReplaceAll();
     testExactBackgroundDocumentWrites();
     testFunctionParsing();

@@ -19,6 +19,8 @@
 #include <QTreeWidget>
 #include <QFileInfo>
 #include <QTabWidget>
+#include <QSplitter>
+#include <QSharedPointer>
 #include <QCloseEvent>
 #include <QStatusBar>
 #include <QVBoxLayout>
@@ -41,6 +43,7 @@
 #include "documentmap.h"
 #include "editorutils.h"
 #include "macromanager.h"
+#include "dualviewmanager.h"
 
 // Include Scintilla ILexer header before Lexilla.h
 #include "ILexer.h"
@@ -48,49 +51,70 @@
 #include "Lexilla.h"
 #include "SciLexer.h"
 
+struct LogicalDocumentState {
+    QString filePath;
+    bool modified = false;
+    int tabNumber = 0;
+    QString id;
+    QString recoveryWarning;
+    bool recoveryCheckpointBlocked = false;
+    bool requiresExplicitSave = false;
+    SessionManager *sessionManager = nullptr;
+};
+
 class DocumentTab : public QWidget {
     Q_OBJECT
 
 public:
     DocumentTab(const QString& filePath = "", int tabNumber = 0,
-                const QString& documentId = QString(), QWidget* parent = nullptr)
-        : QWidget(parent), currentFilePath(filePath), isModified(false), tabNumber(tabNumber),
-          m_documentId(documentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces)
-                                            : documentId) {
+                const QString& documentId = QString(), QWidget* parent = nullptr,
+                QSharedPointer<LogicalDocumentState> shared = {})
+        : QWidget(parent), m_state(shared ? shared : QSharedPointer<LogicalDocumentState>::create()) {
+        if (!shared) {
+            m_state->filePath = filePath;
+            m_state->tabNumber = tabNumber;
+            m_state->id = documentId.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+                                               : documentId;
+        }
         setupUI();
         setupActions();
         updateTitle();
         setupLineNumbers();
     }
+    ~DocumentTab() override {
+        if (editor)
+            editor->disconnect();
+    }
 
     ScintillaEditBase* getEditor() { return editor; }
-    QString getFilePath() const { return currentFilePath; }
-    bool isDirty() const { return isModified; }
-    void setDirty(bool dirty) { isModified = dirty; updateTitle(); }
+    QString getFilePath() const { return m_state->filePath; }
+    bool isDirty() const { return m_state->modified; }
+    void setDirty(bool dirty) { m_state->modified = dirty; updateTitle(); }
     void setRecoveredDirty(bool dirty) {
-        m_requiresExplicitSave = dirty;
+        m_state->requiresExplicitSave = dirty;
         setDirty(dirty);
     }
-    void markExplicitlySaved() { m_requiresExplicitSave = false; }
+    void markExplicitlySaved() { m_state->requiresExplicitSave = false; }
     void setFilePath(const QString& path) {
-        currentFilePath = path;
+        m_state->filePath = path;
         updateTitle();
         // Apply lexer when file path changes (e.g., after Save As)
         applyLexer();
     }
-    int getTabNumber() const { return tabNumber; }
+    int getTabNumber() const { return m_state->tabNumber; }
     bool isDisposablePlaceholder() const {
-        return currentFilePath.isEmpty() && !isModified && editor->send(SCI_GETLENGTH) == 0;
+        return m_state->filePath.isEmpty() && !m_state->modified && editor->send(SCI_GETLENGTH) == 0;
     }
-    QString documentId() const { return m_documentId; }
-    QString recoveryWarning() const { return m_recoveryWarning; }
-    void setRecoveryWarning(const QString &warning) { m_recoveryWarning = warning; }
-    void setRecoveryCheckpointBlocked(bool blocked) { m_recoveryCheckpointBlocked = blocked; }
-    void setSessionManager(SessionManager* sessionManager) { m_sessionManager = sessionManager; }
+    QString documentId() const { return m_state->id; }
+    QString recoveryWarning() const { return m_state->recoveryWarning; }
+    void setRecoveryWarning(const QString &warning) { m_state->recoveryWarning = warning; }
+    void setRecoveryCheckpointBlocked(bool blocked) { m_state->recoveryCheckpointBlocked = blocked; }
+    void setSessionManager(SessionManager* sessionManager) { m_state->sessionManager = sessionManager; }
+    QSharedPointer<LogicalDocumentState> sharedState() const { return m_state; }
     void checkpoint() {
-        if (m_sessionManager && !m_recoveryCheckpointBlocked && !isDisposablePlaceholder()) {
-            m_sessionManager->updateDocument(
-                {m_documentId, currentFilePath, tabNumber, isModified},
+        if (m_state->sessionManager && !m_state->recoveryCheckpointBlocked && !isDisposablePlaceholder()) {
+            m_state->sessionManager->updateDocument(
+                {m_state->id, m_state->filePath, m_state->tabNumber, m_state->modified},
                 EditorUtils::text(editor));
         }
     }
@@ -112,9 +136,9 @@ private:
     void setupActions() {
         // Connect editor signals to track modifications
         connect(editor, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
-            isModified = dirty || m_requiresExplicitSave;
+            m_state->modified = dirty || m_state->requiresExplicitSave;
             if (dirty)
-                m_recoveryCheckpointBlocked = false;
+                m_state->recoveryCheckpointBlocked = false;
             updateTitle();
             checkpoint();
         });
@@ -137,7 +161,7 @@ private:
     }
 
     void onTextChanged() {
-        m_recoveryCheckpointBlocked = false;
+        m_state->recoveryCheckpointBlocked = false;
         checkpoint();
     }
 
@@ -174,8 +198,8 @@ private:
 
     void applyLexer() {
         // If we have a file path, determine the appropriate lexer
-        if (!currentFilePath.isEmpty()) {
-            QString extension = QFileInfo(currentFilePath).suffix().toLower();
+        if (!m_state->filePath.isEmpty()) {
+            QString extension = QFileInfo(m_state->filePath).suffix().toLower();
 
             // Determine lexer based on extension
             QString lexerName = "null";  // Default to null lexer
@@ -484,15 +508,7 @@ signals:
 
 private:
     ScintillaEditBase* editor;
-    QString currentFilePath;
-    bool isModified;
-    int tabNumber;
-    QString m_documentId;
-    QString m_recoveryWarning;
-    bool m_recoveryCheckpointBlocked = false;
-    bool m_requiresExplicitSave = false;
-
-    SessionManager* m_sessionManager = nullptr;
+    QSharedPointer<LogicalDocumentState> m_state;
 };
 
 class MainWindow : public QMainWindow {
@@ -522,6 +538,12 @@ public:
         fileBrowserWidget->setRootPath(
             settings.value(QStringLiteral("fileBrowser/root"), QDir::homePath()).toString());
         refreshPanels();
+    }
+    ~MainWindow() override {
+        for (DocumentTab *tab : documentViews()) {
+            QObject::disconnect(tab->getEditor(), nullptr, this, nullptr);
+            tab->setSessionManager(nullptr);
+        }
     }
 
 protected:
@@ -572,6 +594,8 @@ private slots:
     void saveMacro();
     void syncVertical();
     void syncHorizontal();
+    void moveToOtherView();
+    void cloneToOtherView();
 
     // Find/Replace functions (restored)
     void findNext();
@@ -589,12 +613,18 @@ private:
     bool saveTab(DocumentTab *tab, bool forceSaveAs = false);
     void createNewTab(const QString& filePath = "", const QString &documentId = QString(),
                       int restoredUntitledNumber = 0, bool registerWithSession = true);
+    void wireDocumentView(DocumentTab *tab);
     void checkpointSessionLayout();
     int lowestAvailableUntitledNumber() const;
     int findTabIndexForFilePath(const QString& filePath);
-    bool closeTab(int index, bool ensureOneTab = true);
+    bool closeTab(int index, bool ensureOneTab = true, QTabWidget *pane = nullptr);
     bool closeAllTabs();
     DocumentTab* getCurrentTab() const;
+    QList<QTabWidget *> panes() const;
+    QList<DocumentTab *> documentViews() const;
+    QTabWidget *paneFor(DocumentTab *tab) const;
+    int viewCount(const QString &documentId) const;
+    void updateDualViewActions();
     void updateEditActionsEnabled();
     void refreshPanels();
     void refreshDocumentList();
@@ -610,6 +640,9 @@ private:
     void loadSession();
 
     QTabWidget* tabWidget;
+    QTabWidget* secondaryTabWidget;
+    QSplitter* editorViewSplitter;
+    DualViewManager* dualViewManager;
     QToolBar* toolBar;
     QStatusBar* statusBar;
 
@@ -669,6 +702,8 @@ private:
     QAction *saveMacroAction;
     QAction *syncVerticalAction;
     QAction *syncHorizontalAction;
+    QAction *moveToOtherViewAction;
+    QAction *cloneToOtherViewAction;
 
     // Find/Replace dialog
     FindReplaceDialog *findReplaceDialog;
@@ -683,15 +718,24 @@ private:
     DocumentList* documentListWidget = nullptr;
     QTimer m_panelContentTimer;
     QString m_sessionDiagnostics;
+    QStringList m_documentListIds;
     bool m_loadingSession = false;
     MacroManager *m_macroManager = nullptr;
 };
 
 void MainWindow::setupUI() {
-    tabWidget = new QTabWidget(this);
+    editorViewSplitter = new QSplitter(Qt::Horizontal, this);
+    editorViewSplitter->setObjectName(QStringLiteral("editorViewSplitter"));
+    secondaryTabWidget = new QTabWidget(editorViewSplitter);
+    secondaryTabWidget->setObjectName(QStringLiteral("secondaryTabWidget"));
+    tabWidget = new QTabWidget(editorViewSplitter);
+    tabWidget->setObjectName(QStringLiteral("primaryTabWidget"));
+    editorViewSplitter->insertWidget(0, tabWidget);
     // Enable close buttons on tabs
     tabWidget->setTabsClosable(true);
-    setCentralWidget(tabWidget);
+    secondaryTabWidget->setTabsClosable(true);
+    setCentralWidget(editorViewSplitter);
+    dualViewManager = new DualViewManager(editorViewSplitter, tabWidget, secondaryTabWidget, this);
 
     // Set window title
     setWindowTitle("Notepad++");
@@ -763,17 +807,23 @@ void MainWindow::setupUI() {
     fileBrowserWidget->hide();
     documentListWidget->hide();
 
-    connect(documentListWidget, &DocumentList::documentActivated,
-            tabWidget, &QTabWidget::setCurrentIndex);
+    connect(documentListWidget, &DocumentList::documentActivated, this, [this](int index) {
+        if (index < 0 || index >= m_documentListIds.size()) return;
+        const QString id = m_documentListIds[index];
+        QTabWidget *preferred = dualViewManager->activePane();
+        for (QTabWidget *pane : {preferred, dualViewManager->otherPane(preferred)})
+            for (int i = 0; i < pane->count(); ++i)
+                if (auto *tab = qobject_cast<DocumentTab *>(pane->widget(i)); tab && tab->documentId() == id) {
+                    dualViewManager->activate(pane, i); return;
+                }
+    });
     connect(functionListWidget, &FunctionList::lineActivated,
             this, &MainWindow::navigateToLine);
     connect(documentMapWidget, &DocumentMap::lineActivated,
             this, &MainWindow::navigateToLine);
     connect(fileBrowserWidget, &FileBrowser::fileActivated, this, [this](const QString &path) {
         const int existing = findTabIndexForFilePath(path);
-        if (existing >= 0)
-            tabWidget->setCurrentIndex(existing);
-        else
+        if (existing < 0)
             createNewTab(path);
     });
 }
@@ -825,6 +875,14 @@ void MainWindow::setupActions() {
     saveMacroAction->setObjectName(QStringLiteral("macroSaveAction"));
     syncVerticalAction = new QAction("Sync Vertical", this);
     syncHorizontalAction = new QAction("Sync Horizontal", this);
+    moveToOtherViewAction = new QAction(tr("Move to Other View"), this);
+    moveToOtherViewAction->setObjectName(QStringLiteral("moveToOtherViewAction"));
+    cloneToOtherViewAction = new QAction(tr("Clone to Other View"), this);
+    cloneToOtherViewAction->setObjectName(QStringLiteral("cloneToOtherViewAction"));
+    syncVerticalAction->setObjectName(QStringLiteral("synchronizeVerticalScrollingAction"));
+    syncHorizontalAction->setObjectName(QStringLiteral("synchronizeHorizontalScrollingAction"));
+    syncVerticalAction->setText(tr("Synchronize Vertical Scrolling"));
+    syncHorizontalAction->setText(tr("Synchronize Horizontal Scrolling"));
 
     // Connect file actions
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
@@ -872,10 +930,24 @@ void MainWindow::setupActions() {
             this, &MainWindow::rebuildSavedMacroMenu);
     connect(syncVerticalAction, &QAction::triggered, this, &MainWindow::syncVertical);
     connect(syncHorizontalAction, &QAction::triggered, this, &MainWindow::syncHorizontal);
+    connect(moveToOtherViewAction, &QAction::triggered, this, &MainWindow::moveToOtherView);
+    connect(cloneToOtherViewAction, &QAction::triggered, this, &MainWindow::cloneToOtherView);
 
     // Connect tab signals
-    connect(tabWidget, &QTabWidget::currentChanged, this, &MainWindow::tabChanged);
+    connect(tabWidget, &QTabWidget::currentChanged, this, [this](int index) {
+        if (index >= 0) dualViewManager->activate(tabWidget, index);
+        dualViewManager->recaptureSyncOffsets();
+        tabChanged(index);
+    });
     connect(tabWidget, &QTabWidget::tabCloseRequested, this, &MainWindow::tabCloseRequested);
+    connect(secondaryTabWidget, &QTabWidget::currentChanged, this, [this](int index) {
+        if (index >= 0) dualViewManager->activate(secondaryTabWidget, index);
+        dualViewManager->recaptureSyncOffsets();
+        tabChanged(index);
+    });
+    connect(secondaryTabWidget, &QTabWidget::tabCloseRequested, this,
+            [this](int index) { closeTab(index, true, secondaryTabWidget); });
+    connect(dualViewManager, &DualViewManager::activePaneChanged, this, [this] { tabChanged(0); });
 
     // Add actions to menus
     fileMenu->addAction(newAction);
@@ -901,6 +973,17 @@ void MainWindow::setupActions() {
 
     searchMenu->addAction(findAction);
     searchMenu->addAction(replaceAction);
+    viewMenu->addAction(moveToOtherViewAction);
+    viewMenu->addAction(cloneToOtherViewAction);
+    viewMenu->addAction(syncVerticalAction);
+    viewMenu->addAction(syncHorizontalAction);
+    for (QTabWidget *pane : {tabWidget, secondaryTabWidget}) {
+        pane->setContextMenuPolicy(Qt::ActionsContextMenu);
+        pane->addAction(moveToOtherViewAction);
+        pane->addAction(cloneToOtherViewAction);
+        pane->addAction(syncVerticalAction);
+        pane->addAction(syncHorizontalAction);
+    }
 
     macroMenu->insertAction(savedMacroMenu->menuAction(), startMacroRecordingAction);
     macroMenu->insertAction(savedMacroMenu->menuAction(), stopMacroRecordingAction);
@@ -954,6 +1037,8 @@ void MainWindow::setupActions() {
     toolBar->addSeparator();
     toolBar->addAction(syncVerticalAction);
     toolBar->addAction(syncHorizontalAction);
+    toolBar->addAction(moveToOtherViewAction);
+    toolBar->addAction(cloneToOtherViewAction);
 
     // Set shortcuts
     newAction->setShortcut(QKeySequence::New);
@@ -1025,8 +1110,10 @@ void MainWindow::setupActions() {
             documentListAction, &QAction::setChecked);
     rebuildSavedMacroMenu();
     updateMacroActions();
-    syncVerticalAction->setEnabled(false);
-    syncHorizontalAction->setEnabled(false);
+    syncVerticalAction->setCheckable(true);
+    syncHorizontalAction->setCheckable(true);
+    dualViewManager->bindSyncActions(syncVerticalAction, syncHorizontalAction);
+    updateDualViewActions();
 
     // Assign icons to actions
     newAction->setIcon(QIcon(":/icons/new.ico"));
@@ -1073,7 +1160,6 @@ void MainWindow::openFile() {
         // Check if file is already open
         int existingIndex = findTabIndexForFilePath(fileName);
         if (existingIndex != -1) {
-            tabWidget->setCurrentIndex(existingIndex);
             return;
         }
 
@@ -1255,6 +1341,7 @@ void MainWindow::tabChanged(int index) {
     updateStatusBar();
     refreshPanels();
     updateMacroActions();
+    updateDualViewActions();
 
     // Update word wrap action state to match current tab
     DocumentTab* currentTab = getCurrentTab();
@@ -1277,14 +1364,16 @@ void MainWindow::tabChanged(int index) {
 }
 
 void MainWindow::tabCloseRequested(int index) {
-    closeTab(index);
+    closeTab(index, true, tabWidget);
 }
 
 void MainWindow::documentTitleChanged() {
     DocumentTab* tab = qobject_cast<DocumentTab*>(sender());
     if (tab) {
-        int index = tabWidget->indexOf(tab);
-        if (index != -1) {
+        for (DocumentTab *view : documentViews()) {
+          if (view->documentId() == tab->documentId()) {
+            QTabWidget *pane = paneFor(view);
+            int index = pane->indexOf(view);
             QString title;
             if (tab->getFilePath().isEmpty()) {
                 // For untitled documents, use the tab number that was assigned
@@ -1296,7 +1385,8 @@ void MainWindow::documentTitleChanged() {
             if (tab->isDirty()) {
                 title += "*";
             }
-            tabWidget->setTabText(index, title);
+            pane->setTabText(index, title);
+          }
         }
     }
     updateStatusBar();
@@ -1368,28 +1458,7 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
                                    : lowestAvailableUntitledNumber();
     DocumentTab* newTab = new DocumentTab(filePath, assignedNumber, documentId, this);
 
-    // Connect the tab's titleChanged signal to update the tab text
-    connect(newTab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
-
-    // Connect editor signals for status bar updates
-    connect(newTab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
-    connect(newTab->getEditor(), &ScintillaEditBase::notify, this,
-            [this, newTab](Scintilla::NotificationData *notification) {
-                if (newTab != getCurrentTab())
-                    return;
-                if (notification->nmhdr.code == Scintilla::Notification::Modified &&
-                    (Scintilla::FlagSet(notification->modificationType,
-                                        Scintilla::ModificationFlags::InsertText) ||
-                     Scintilla::FlagSet(notification->modificationType,
-                                        Scintilla::ModificationFlags::DeleteText))) {
-                    schedulePanelContentRefresh();
-                }
-            });
-    connect(newTab->getEditor(), &ScintillaEditBase::verticalScrolled, this,
-            [this, newTab](int) {
-                if (newTab == getCurrentTab())
-                    refreshPanelViewport();
-            });
+    wireDocumentView(newTab);
 
     QString title;
     if (filePath.isEmpty()) {
@@ -1399,7 +1468,6 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
         if (registerWithSession) {
             int existingIndex = findTabIndexForFilePath(filePath);
             if (existingIndex != -1) {
-                tabWidget->setCurrentIndex(existingIndex);
                 newTab->deleteLater();
                 return;
             }
@@ -1407,11 +1475,12 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
         title = QFileInfo(filePath).fileName();
     }
 
-    int index = tabWidget->addTab(newTab, title);
-    tabWidget->setCurrentIndex(index);
+    QTabWidget *targetPane = m_loadingSession ? tabWidget : dualViewManager->activePane();
+    int index = targetPane->addTab(newTab, title);
+    dualViewManager->activate(targetPane, index);
 
     if (!filePath.isEmpty() && registerWithSession && !loadFile(filePath)) {
-        tabWidget->removeTab(index);
+        targetPane->removeTab(index);
         newTab->deleteLater();
         return;
     }
@@ -1427,13 +1496,35 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
 
     // Update status bar for new tab
     updateStatusBar();
+    dualViewManager->updatePaneVisibility();
+    updateDualViewActions();
+}
+
+void MainWindow::wireDocumentView(DocumentTab *tab)
+{
+    connect(tab, &DocumentTab::titleChanged, this, &MainWindow::documentTitleChanged);
+    connect(tab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
+    connect(tab->getEditor(), &ScintillaEditBase::notify, this,
+            [this, tab](Scintilla::NotificationData *notification) {
+                if (tab != getCurrentTab()) return;
+                if (notification->nmhdr.code == Scintilla::Notification::Modified &&
+                    (Scintilla::FlagSet(notification->modificationType,
+                                        Scintilla::ModificationFlags::InsertText) ||
+                     Scintilla::FlagSet(notification->modificationType,
+                                        Scintilla::ModificationFlags::DeleteText)))
+                    schedulePanelContentRefresh();
+            });
+    connect(tab->getEditor(), &ScintillaEditBase::verticalScrolled, this,
+            [this, tab](int) {
+                if (tab == getCurrentTab()) refreshPanelViewport();
+            });
+    dualViewManager->connectEditor(tab->getEditor());
 }
 
 int MainWindow::lowestAvailableUntitledNumber() const
 {
     QSet<int> usedNumbers;
-    for (int i = 0; i < tabWidget->count(); ++i) {
-        auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
+    for (auto *tab : documentViews()) {
         if (tab && tab->getFilePath().isEmpty() && tab->getTabNumber() > 0)
             usedNumbers.insert(tab->getTabNumber());
     }
@@ -1448,12 +1539,13 @@ void MainWindow::checkpointSessionLayout()
     if (!m_sessionManager || m_loadingSession)
         return;
     QStringList ids;
-    for (int i = 0; i < tabWidget->count(); ++i) {
-        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
-            tab && tab->isDisposablePlaceholder()) {
+    QSet<QString> seen;
+    for (auto *tab : documentViews()) {
+        if (tab && tab->isDisposablePlaceholder()) {
             m_sessionManager->removeDocument(tab->documentId());
-        } else if (tab) {
+        } else if (tab && !seen.contains(tab->documentId())) {
             ids << tab->documentId();
+            seen.insert(tab->documentId());
         }
     }
     DocumentTab *active = getCurrentTab();
@@ -1461,24 +1553,40 @@ void MainWindow::checkpointSessionLayout()
                                  ? active->documentId()
                                  : QString();
     m_sessionManager->setSessionLayout(ids, activeId);
+    QStringList primaryIds, secondaryIds;
+    for (int i = 0; i < tabWidget->count(); ++i)
+        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i)); tab && !tab->isDisposablePlaceholder())
+            primaryIds << tab->documentId();
+    for (int i = 0; i < secondaryTabWidget->count(); ++i)
+        if (auto *tab = qobject_cast<DocumentTab *>(secondaryTabWidget->widget(i)); tab && !tab->isDisposablePlaceholder())
+            secondaryIds << tab->documentId();
+    m_sessionManager->setDualViewLayout(primaryIds, secondaryIds,
+        dualViewManager->activePane() == secondaryTabWidget ? QStringLiteral("secondary") : QStringLiteral("primary"),
+        editorViewSplitter->orientation(), editorViewSplitter->sizes());
 }
 
 int MainWindow::findTabIndexForFilePath(const QString& filePath) {
-    for (int i = 0; i < tabWidget->count(); ++i) {
-        DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
+    QTabWidget *active = dualViewManager->activePane();
+    for (QTabWidget *pane : {active, dualViewManager->otherPane(active)}) {
+      for (int i = 0; i < pane->count(); ++i) {
+        DocumentTab* tab = qobject_cast<DocumentTab*>(pane->widget(i));
         if (tab && tab->getFilePath() == filePath) {
+            dualViewManager->activate(pane, i);
             return i;
         }
+      }
     }
     return -1;
 }
 
-bool MainWindow::closeTab(int index, bool ensureOneTab) {
-    DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(index));
+bool MainWindow::closeTab(int index, bool ensureOneTab, QTabWidget *pane) {
+    pane = pane ? pane : dualViewManager->activePane();
+    DocumentTab* tab = qobject_cast<DocumentTab*>(pane->widget(index));
     if (!tab) return false;
+    const bool finalView = viewCount(tab->documentId()) == 1;
 
     // If the tab is modified, ask user
-    if (tab->isDirty()) {
+    if (finalView && tab->isDirty()) {
         QMessageBox msgBox(this);
         msgBox.setWindowTitle("Save Changes");
         msgBox.setText("The document has been modified.");
@@ -1500,32 +1608,52 @@ bool MainWindow::closeTab(int index, bool ensureOneTab) {
         }
     }
 
-    if (m_sessionManager)
+    if (finalView && m_sessionManager)
         m_sessionManager->removeDocument(tab->documentId());
-    tabWidget->removeTab(index);
+    pane->removeTab(index);
     tab->deleteLater();
+    dualViewManager->updatePaneVisibility();
+    updateDualViewActions();
 
     // Ensure at least one tab remains
-    if (ensureOneTab && tabWidget->count() == 0) {
+    if (ensureOneTab && tabWidget->count() + secondaryTabWidget->count() == 0) {
         createNewTab();
     }
+    checkpointSessionLayout();
 
     return true;
 }
 
 bool MainWindow::closeAllTabs() {
-    // Check all tabs for unsaved changes
-    for (int i = tabWidget->count() - 1; i >= 0; --i) {
-        if (!closeTab(i, false)) {
+    for (QTabWidget *pane : {secondaryTabWidget, tabWidget}) {
+      for (int i = pane->count() - 1; i >= 0; --i) {
+        if (!closeTab(i, false, pane)) {
             return false; // Cancelled by user
         }
+      }
     }
     return true;
 }
 
 DocumentTab* MainWindow::getCurrentTab() const {
-    QWidget* currentWidget = tabWidget->currentWidget();
+    QWidget* currentWidget = dualViewManager->activePane()->currentWidget();
     return qobject_cast<DocumentTab*>(currentWidget);
+}
+
+QList<QTabWidget *> MainWindow::panes() const { return {tabWidget, secondaryTabWidget}; }
+QList<DocumentTab *> MainWindow::documentViews() const {
+    QList<DocumentTab *> result;
+    for (QTabWidget *pane : panes()) for (int i = 0; i < pane->count(); ++i)
+        if (auto *tab = qobject_cast<DocumentTab *>(pane->widget(i))) result << tab;
+    return result;
+}
+QTabWidget *MainWindow::paneFor(DocumentTab *tab) const {
+    for (QTabWidget *pane : panes()) if (pane->indexOf(tab) >= 0) return pane;
+    return nullptr;
+}
+int MainWindow::viewCount(const QString &id) const {
+    int count = 0; for (auto *tab : documentViews()) if (tab->documentId() == id) ++count;
+    return count;
 }
 
 void MainWindow::updateEditActionsEnabled() {
@@ -1609,9 +1737,10 @@ void MainWindow::updateWindowTitle() {
 // Close actions implementation
 void MainWindow::closeTabAction()
 {
-    int currentIndex = tabWidget->currentIndex();
+    QTabWidget *pane = dualViewManager->activePane();
+    int currentIndex = pane->currentIndex();
     if (currentIndex >= 0) {
-        closeTab(currentIndex);
+        closeTab(currentIndex, true, pane);
     }
 }
 
@@ -1626,11 +1755,11 @@ void MainWindow::closeAllTabsAction()
 void MainWindow::saveAllTabsAction()
 {
     bool saveCancelled = false;
-
-    for (int i = 0; i < tabWidget->count() && !saveCancelled; ++i) {
-        DocumentTab* tab = qobject_cast<DocumentTab*>(tabWidget->widget(i));
-        if (tab && tab->isDirty() && !saveTab(tab))
+    QSet<QString> saved;
+    for (DocumentTab *tab : documentViews()) {
+        if (!saveCancelled && tab && tab->isDirty() && !saved.contains(tab->documentId()) && !saveTab(tab))
             saveCancelled = true;
+        if (tab) saved.insert(tab->documentId());
     }
 
     // Update status bar after saving all
@@ -1641,9 +1770,12 @@ void MainWindow::saveAllTabsAction()
 CheckpointStatus MainWindow::saveSession() {
     if (!m_sessionManager)
         return CheckpointStatus::NoChanges;
-    for (int i = 0; i < tabWidget->count(); ++i) {
-        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i)))
+    QSet<QString> checkpointed;
+    for (DocumentTab *tab : documentViews()) {
+        if (tab && !checkpointed.contains(tab->documentId())) {
             tab->checkpoint();
+            checkpointed.insert(tab->documentId());
+        }
     }
     checkpointSessionLayout();
     return m_sessionManager->flush();
@@ -1700,18 +1832,54 @@ void MainWindow::loadSession() {
     }
     m_loadingSession = false;
 
-    if (tabWidget->count() == 0)
-        createNewTab();
-    else {
-        int activeIndex = 0;
-        for (int i = 0; i < tabWidget->count(); ++i) {
-            auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
-            if (tab && tab->documentId() == requestedActiveId) {
-                activeIndex = i;
-                break;
+    const QStringList restoredPrimary = m_sessionManager->primaryDocumentIds();
+    const QStringList restoredSecondary = m_sessionManager->secondaryDocumentIds();
+    if (!restoredPrimary.isEmpty() || !restoredSecondary.isEmpty()) {
+        QHash<QString, DocumentTab *> originals;
+        for (auto *view : documentViews()) originals.insert(view->documentId(), view);
+        for (const QString &id : restoredSecondary) {
+            DocumentTab *original = originals.value(id);
+            if (!original) continue;
+            if (restoredPrimary.contains(id)) {
+                auto *clone = new DocumentTab({}, 0, {}, this, original->sharedState());
+                clone->getEditor()->send(SCI_SETDOCPOINTER, 0, original->getEditor()->send(SCI_GETDOCPOINTER));
+                wireDocumentView(clone);
+                secondaryTabWidget->addTab(clone, tabWidget->tabText(tabWidget->indexOf(original)));
+            } else {
+                const int index = tabWidget->indexOf(original);
+                const QString title = tabWidget->tabText(index);
+                tabWidget->removeTab(index);
+                secondaryTabWidget->addTab(original, title);
             }
         }
-        tabWidget->setCurrentIndex(activeIndex);
+        editorViewSplitter->setOrientation(m_sessionManager->splitterOrientation());
+        if (m_sessionManager->splitterSizes().size() == 2)
+            editorViewSplitter->setSizes(m_sessionManager->splitterSizes());
+        dualViewManager->updatePaneVisibility();
+        dualViewManager->activate(m_sessionManager->activePane() == QStringLiteral("secondary") && secondaryTabWidget->count()
+                                      ? secondaryTabWidget : tabWidget);
+    }
+
+    if (tabWidget->count() + secondaryTabWidget->count() == 0)
+        createNewTab();
+    else {
+        QTabWidget *preferred = m_sessionManager->activePane() == QStringLiteral("secondary")
+                                   ? secondaryTabWidget : tabWidget;
+        QTabWidget *chosenPane = preferred->count() ? preferred : dualViewManager->otherPane(preferred);
+        int activeIndex = 0;
+        for (QTabWidget *pane : {preferred, dualViewManager->otherPane(preferred)}) {
+            for (int i = 0; i < pane->count(); ++i) {
+                auto *tab = qobject_cast<DocumentTab *>(pane->widget(i));
+                if (tab && tab->documentId() == requestedActiveId) {
+                    chosenPane = pane; activeIndex = i; break;
+                }
+            }
+            if (chosenPane->count() > activeIndex) {
+                auto *tab = qobject_cast<DocumentTab *>(chosenPane->widget(activeIndex));
+                if (tab && tab->documentId() == requestedActiveId) break;
+            }
+        }
+        dualViewManager->activate(chosenPane, activeIndex);
         checkpointSessionLayout();
         updateStatusBar();
     }
@@ -2023,21 +2191,69 @@ void MainWindow::rebuildSavedMacroMenu()
 }
 
 void MainWindow::syncVertical() {
-    // Show that we're properly handling vertical sync functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Sync Vertical");
-    msg.setText("Vertical synchronization initialized (would operate on real editor views)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    dualViewManager->setVerticalSync(syncVerticalAction->isChecked());
 }
 
 void MainWindow::syncHorizontal() {
-    // Show that we're properly handling horizontal sync functionality
-    QMessageBox msg(this);
-    msg.setWindowTitle("Sync Horizontal");
-    msg.setText("Horizontal synchronization initialized (would manage two side-by-side editor views)");
-    msg.setIcon(QMessageBox::Information);
-    msg.exec();
+    dualViewManager->setHorizontalSync(syncHorizontalAction->isChecked());
+}
+
+void MainWindow::moveToOtherView()
+{
+    QTabWidget *source = dualViewManager->activePane();
+    auto *tab = qobject_cast<DocumentTab *>(source->currentWidget());
+    if (!tab) return;
+    QTabWidget *target = dualViewManager->otherPane(source);
+    for (int i = 0; i < target->count(); ++i) {
+        auto *other = qobject_cast<DocumentTab *>(target->widget(i));
+        if (other && other->documentId() == tab->documentId()) {
+            const int sourceIndex = source->indexOf(tab);
+            source->removeTab(sourceIndex);
+            tab->deleteLater();
+            dualViewManager->activate(target, i);
+            dualViewManager->updatePaneVisibility();
+            updateDualViewActions();
+            checkpointSessionLayout();
+            return;
+        }
+    }
+    const int sourceIndex = source->indexOf(tab);
+    const QString title = source->tabText(sourceIndex);
+    source->removeTab(sourceIndex);
+    const int targetIndex = target->addTab(tab, title);
+    dualViewManager->activate(target, targetIndex);
+    dualViewManager->updatePaneVisibility();
+    updateDualViewActions();
+    checkpointSessionLayout();
+}
+
+void MainWindow::cloneToOtherView()
+{
+    QTabWidget *source = dualViewManager->activePane();
+    auto *original = qobject_cast<DocumentTab *>(source->currentWidget());
+    if (!original) return;
+    QTabWidget *target = dualViewManager->otherPane(source);
+    for (int i = 0; i < target->count(); ++i) {
+        auto *existing = qobject_cast<DocumentTab *>(target->widget(i));
+        if (existing && existing->documentId() == original->documentId()) {
+            dualViewManager->activate(target, i); return;
+        }
+    }
+    auto *clone = new DocumentTab({}, 0, {}, this, original->sharedState());
+    clone->getEditor()->send(SCI_SETDOCPOINTER, 0, original->getEditor()->send(SCI_GETDOCPOINTER));
+    wireDocumentView(clone);
+    const int index = target->addTab(clone, source->tabText(source->currentIndex()));
+    dualViewManager->activate(target, index);
+    dualViewManager->updatePaneVisibility();
+    updateDualViewActions();
+    checkpointSessionLayout();
+}
+
+void MainWindow::updateDualViewActions()
+{
+    const bool has = getCurrentTab() != nullptr;
+    moveToOtherViewAction->setEnabled(has);
+    cloneToOtherViewAction->setEnabled(has && viewCount(getCurrentTab()->documentId()) < 2);
 }
 
 void MainWindow::refreshPanels()
@@ -2052,17 +2268,22 @@ void MainWindow::refreshDocumentList()
     if (!documentListWidget->isVisible())
         return;
     QVector<DocumentListEntry> documents;
-    documents.reserve(tabWidget->count());
-    for (int index = 0; index < tabWidget->count(); ++index) {
-        auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(index));
+    m_documentListIds.clear();
+    QSet<QString> seen;
+    int activeIndex = -1;
+    for (auto *tab : documentViews()) {
         if (!tab)
             continue;
+        if (seen.contains(tab->documentId())) continue;
+        seen.insert(tab->documentId());
+        if (getCurrentTab() && getCurrentTab()->documentId() == tab->documentId()) activeIndex = documents.size();
         const QString name = tab->getFilePath().isEmpty()
             ? QStringLiteral("new %1").arg(tab->getTabNumber())
             : QFileInfo(tab->getFilePath()).fileName();
         documents.push_back({name, tab->getFilePath(), tab->isDirty()});
+        m_documentListIds << tab->documentId();
     }
-    documentListWidget->setDocuments(documents, tabWidget->currentIndex());
+    documentListWidget->setDocuments(documents, activeIndex);
 }
 
 void MainWindow::refreshPanelContent()
@@ -2142,12 +2363,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
             break;
         if (decision == QMessageBox::Save) {
             bool allSaved = true;
-            for (int i = 0; i < tabWidget->count(); ++i) {
-                auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
-                if (tab && tab->isDirty() && !saveTab(tab)) {
+            QSet<QString> saved;
+            for (DocumentTab *tab : documentViews()) {
+                if (tab && tab->isDirty() && !saved.contains(tab->documentId()) && !saveTab(tab)) {
                     allSaved = false;
                     break;
                 }
+                if (tab) saved.insert(tab->documentId());
             }
             if (!allSaved) {
                 event->ignore();

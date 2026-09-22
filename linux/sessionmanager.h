@@ -3,6 +3,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -58,7 +59,7 @@ class SessionManager : public QObject
     Q_OBJECT
 
 public:
-    static constexpr int SchemaVersion = 2;
+    static constexpr int SchemaVersion = 3;
     static constexpr int DefaultCheckpointIntervalMs = 1000;
 
     explicit SessionManager(QObject *parent = nullptr,
@@ -71,11 +72,19 @@ public:
     void updateDocument(const DocumentCheckpoint &document, const QByteArray &content);
     void removeDocument(const QString &id);
     void setSessionLayout(const QStringList &orderedIds, const QString &activeId);
+    void setDualViewLayout(const QStringList &primaryIds, const QStringList &secondaryIds,
+                           const QString &activePane, Qt::Orientation orientation,
+                           const QList<int> &splitterSizes);
     CheckpointStatus flush();
     CheckpointStatus shutdown();
 
     QVector<RecoveryDocument> documents() const;
     QString activeDocumentId() const;
+    QStringList primaryDocumentIds() const { return m_primaryDocumentIds; }
+    QStringList secondaryDocumentIds() const { return m_secondaryDocumentIds; }
+    QString activePane() const { return m_activePane; }
+    Qt::Orientation splitterOrientation() const { return m_splitterOrientation; }
+    QList<int> splitterSizes() const { return m_splitterSizes; }
     RecoveryReadResult readRecoveryContent(const RecoveryDocument &document) const;
     QStringList diagnostics() const;
     QString storageDirectory() const;
@@ -99,6 +108,7 @@ private:
     void scheduleCheckpoint();
     CheckpointStatus writeCheckpoint();
     bool loadVersion2(const QJsonObject &root);
+    bool loadVersion3(const QJsonObject &root);
     bool importLegacyDirectory(const QString &directory);
 
     QTimer m_checkpointTimer;
@@ -107,6 +117,11 @@ private:
     QStringList m_legacyDirectories;
     QVector<RecoveryDocument> m_documents;
     QString m_activeDocumentId;
+    QStringList m_primaryDocumentIds;
+    QStringList m_secondaryDocumentIds;
+    QString m_activePane = QStringLiteral("primary");
+    Qt::Orientation m_splitterOrientation = Qt::Horizontal;
+    QList<int> m_splitterSizes;
     QStringList m_diagnostics;
     QHash<QString, QByteArray> m_pendingSnapshots;
     QStringList m_obsoleteSnapshots;
