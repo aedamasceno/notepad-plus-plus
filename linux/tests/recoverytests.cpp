@@ -728,6 +728,103 @@ void testMainWindowRestartPreservesOrderActiveAndDirty()
     qunsetenv("NPP_SESSION_DIR");
 }
 
+void testUntitledNumberingAndDisposablePlaceholderPersistence()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
+
+    QMainWindow *window = createMainWindow();
+    auto *tabs = window->findChild<QTabWidget *>();
+    QAction *newAction = actionWithText(window, QStringLiteral("New"));
+    expect(tabs->count() == 1 && tabs->tabText(0) == QStringLiteral("new 1"),
+           "fresh window starts with new 1");
+
+    newAction->trigger();
+    expect(tabs->tabText(1) == QStringLiteral("new 2"),
+           "open disposable untitled tabs have distinct numbers");
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 0));
+    newAction->trigger();
+    expect(tabs->tabText(0) == QStringLiteral("new 2") &&
+               tabs->tabText(1) == QStringLiteral("new 1"),
+           "new 1 is allocated when only new 2 remains open");
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 1));
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 0));
+
+    newAction->trigger();
+    expect(tabs->tabText(1) == QStringLiteral("new 2"),
+           "second disposable tab uses new 2");
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 1));
+    newAction->trigger();
+    expect(tabs->tabText(1) == QStringLiteral("new 2"),
+           "closing untouched tab reuses lowest available number");
+    newAction->trigger();
+    expect(tabs->tabText(2) == QStringLiteral("new 3"),
+           "three open untitled tabs are numbered consecutively");
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 1));
+    newAction->trigger();
+    expect(tabs->tabText(2) == QStringLiteral("new 2"),
+           "closing new 2 from new 1/new 2/new 3 reuses new 2");
+
+    while (tabs->count() > 1) {
+        QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                                  Q_ARG(int, tabs->count() - 1));
+    }
+    QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection,
+                              Q_ARG(int, 0));
+    expect(tabs->count() == 1 && tabs->tabText(0) == QStringLiteral("new 1"),
+           "closing all disposable tabs naturally recreates new 1");
+
+    window->findChild<SessionManager *>()->flush();
+    expect(window->findChild<SessionManager *>()->documents().isEmpty(),
+           "clean empty untitled placeholder is absent from recovery metadata");
+    window->close();
+    delete window;
+
+    window = createMainWindow();
+    tabs = window->findChild<QTabWidget *>();
+    expect(tabs->count() == 1 && tabs->tabText(0) == QStringLiteral("new 1"),
+           "restart recreates a disposable new 1 without advancing numbering");
+    auto *editor = tabs->currentWidget()->findChild<ScintillaEditBase *>();
+    editor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>("meaningful"));
+    window->findChild<SessionManager *>()->flush();
+    window->close();
+    delete window;
+
+    window = createMainWindow();
+    tabs = window->findChild<QTabWidget *>();
+    expect(tabs->count() == 1 && tabs->tabText(0) == QStringLiteral("new 1*") &&
+               EditorUtils::text(tabs->currentWidget()->findChild<ScintillaEditBase *>()) ==
+                   "meaningful",
+           "dirty new 1 survives restart with its exact number and content");
+    actionWithText(window, QStringLiteral("New"))->trigger();
+    expect(tabs->tabText(1) == QStringLiteral("new 2"),
+           "new tab after recovered dirty new 1 is new 2");
+    window->close();
+    delete window;
+    qunsetenv("NPP_SESSION_DIR");
+
+    QTemporaryDir fileRoot;
+    const QString fileSession = fileRoot.filePath(QStringLiteral("session"));
+    qputenv("NPP_SESSION_DIR", fileSession.toUtf8());
+    window = createMainWindow();
+    tabs = window->findChild<QTabWidget *>();
+    const QString savedPath = fileRoot.filePath(QStringLiteral("saved.txt"));
+    chooseSavePath(savedPath);
+    actionWithText(window, QStringLiteral("Save As"))->trigger();
+    actionWithText(window, QStringLiteral("New"))->trigger();
+    expect(tabs->count() == 2 && tabs->tabText(1) == QStringLiteral("new 1"),
+           "saved file tabs do not influence untitled numbering");
+    window->close();
+    delete window;
+    qunsetenv("NPP_SESSION_DIR");
+}
+
 void testCancelAndDiscardRecoveryLifecycle()
 {
     QTemporaryDir root;
@@ -750,9 +847,8 @@ void testCancelAndDiscardRecoveryLifecycle()
     chooseMessageBox(QMessageBox::Discard);
     QMetaObject::invokeMethod(window, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, 0));
     window->findChild<SessionManager *>()->flush();
-    expect(window->findChild<SessionManager *>()->documents().size() == 1 &&
-               window->findChild<SessionManager *>()->documents().first().dirty == false,
-           "discard removes closed recovery and replacement blank is clean");
+    expect(window->findChild<SessionManager *>()->documents().isEmpty(),
+           "discard removes closed recovery and omits replacement blank metadata");
     window->close();
     delete window;
     qunsetenv("NPP_SESSION_DIR");
@@ -780,11 +876,11 @@ void testDirtyNamedMainWindowRestart()
            "dirty named checkpoint never writes the original");
     QMainWindow *second = createMainWindow();
     tabs = second->findChild<QTabWidget *>();
-    expect(tabs->count() == 2 && tabs->currentIndex() == 1,
+    expect(tabs->count() == 1 && tabs->currentIndex() == 0,
            "dirty named restart preserves order and active selection");
-    expect(EditorUtils::text(tabs->widget(1)->findChild<ScintillaEditBase *>()) ==
+    expect(EditorUtils::text(tabs->widget(0)->findChild<ScintillaEditBase *>()) ==
                QStringLiteral("dirty named café 雪").toUtf8() &&
-               tabs->tabText(1).endsWith(QLatin1Char('*')),
+               tabs->tabText(0).endsWith(QLatin1Char('*')),
            "dirty named restart restores exact Unicode snapshot and dirty state");
     second->close();
     delete second;
@@ -941,6 +1037,7 @@ int main(int argc, char **argv)
     testHistoricalNppLinuxLocationDiscovery();
     testAtomicOrdinarySaveFailurePreservesOriginal();
     testMainWindowRestartPreservesOrderActiveAndDirty();
+    testUntitledNumberingAndDisposablePlaceholderPersistence();
     testCancelAndDiscardRecoveryLifecycle();
     testDirtyNamedMainWindowRestart();
     testDuplicateNamedPathsRestoreByStableIdentity();

@@ -28,6 +28,7 @@
 #include <QIcon>
 #include <QTimer>
 #include <QSettings>
+#include <QSet>
 #include <QDir>
 #include <QByteArray>
 #include <QUuid>
@@ -78,13 +79,16 @@ public:
         applyLexer();
     }
     int getTabNumber() const { return tabNumber; }
+    bool isDisposablePlaceholder() const {
+        return currentFilePath.isEmpty() && !isModified && editor->send(SCI_GETLENGTH) == 0;
+    }
     QString documentId() const { return m_documentId; }
     QString recoveryWarning() const { return m_recoveryWarning; }
     void setRecoveryWarning(const QString &warning) { m_recoveryWarning = warning; }
     void setRecoveryCheckpointBlocked(bool blocked) { m_recoveryCheckpointBlocked = blocked; }
     void setSessionManager(SessionManager* sessionManager) { m_sessionManager = sessionManager; }
     void checkpoint() {
-        if (m_sessionManager && !m_recoveryCheckpointBlocked) {
+        if (m_sessionManager && !m_recoveryCheckpointBlocked && !isDisposablePlaceholder()) {
             m_sessionManager->updateDocument(
                 {m_documentId, currentFilePath, tabNumber, isModified},
                 EditorUtils::text(editor));
@@ -495,7 +499,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr) : QMainWindow(parent), nextUntitledNumber(1) {
+    MainWindow(QWidget *parent = nullptr) : QMainWindow(parent) {
         m_macroManager = new MacroManager(this);
         setupUI();
         setupActions();
@@ -586,6 +590,7 @@ private:
     void createNewTab(const QString& filePath = "", const QString &documentId = QString(),
                       int restoredUntitledNumber = 0, bool registerWithSession = true);
     void checkpointSessionLayout();
+    int lowestAvailableUntitledNumber() const;
     int findTabIndexForFilePath(const QString& filePath);
     bool closeTab(int index, bool ensureOneTab = true);
     bool closeAllTabs();
@@ -665,9 +670,6 @@ private:
     QAction *syncVerticalAction;
     QAction *syncHorizontalAction;
 
-    // Counter for untitled documents
-    int nextUntitledNumber;
-
     // Find/Replace dialog
     FindReplaceDialog *findReplaceDialog;
 
@@ -681,6 +683,7 @@ private:
     DocumentList* documentListWidget = nullptr;
     QTimer m_panelContentTimer;
     QString m_sessionDiagnostics;
+    bool m_loadingSession = false;
     MacroManager *m_macroManager = nullptr;
 };
 
@@ -1360,7 +1363,9 @@ void MainWindow::updateStatusBar() {
 
 void MainWindow::createNewTab(const QString& filePath, const QString &documentId,
                               int restoredUntitledNumber, bool registerWithSession) {
-    const int assignedNumber = restoredUntitledNumber > 0 ? restoredUntitledNumber : nextUntitledNumber;
+    const int assignedNumber = restoredUntitledNumber > 0
+                                   ? restoredUntitledNumber
+                                   : lowestAvailableUntitledNumber();
     DocumentTab* newTab = new DocumentTab(filePath, assignedNumber, documentId, this);
 
     // Connect the tab's titleChanged signal to update the tab text
@@ -1389,7 +1394,6 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
     QString title;
     if (filePath.isEmpty()) {
         title = QString("new %1").arg(assignedNumber);
-        nextUntitledNumber = qMax(nextUntitledNumber, assignedNumber + 1);
     } else {
         // Interactive open suppresses duplicates; identity-based restoration does not.
         if (registerWithSession) {
@@ -1425,17 +1429,38 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
     updateStatusBar();
 }
 
+int MainWindow::lowestAvailableUntitledNumber() const
+{
+    QSet<int> usedNumbers;
+    for (int i = 0; i < tabWidget->count(); ++i) {
+        auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
+        if (tab && tab->getFilePath().isEmpty() && tab->getTabNumber() > 0)
+            usedNumbers.insert(tab->getTabNumber());
+    }
+    int candidate = 1;
+    while (usedNumbers.contains(candidate))
+        ++candidate;
+    return candidate;
+}
+
 void MainWindow::checkpointSessionLayout()
 {
-    if (!m_sessionManager)
+    if (!m_sessionManager || m_loadingSession)
         return;
     QStringList ids;
     for (int i = 0; i < tabWidget->count(); ++i) {
-        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i)))
+        if (auto *tab = qobject_cast<DocumentTab *>(tabWidget->widget(i));
+            tab && tab->isDisposablePlaceholder()) {
+            m_sessionManager->removeDocument(tab->documentId());
+        } else if (tab) {
             ids << tab->documentId();
+        }
     }
     DocumentTab *active = getCurrentTab();
-    m_sessionManager->setSessionLayout(ids, active ? active->documentId() : QString());
+    const QString activeId = active && !active->isDisposablePlaceholder()
+                                 ? active->documentId()
+                                 : QString();
+    m_sessionManager->setSessionLayout(ids, activeId);
 }
 
 int MainWindow::findTabIndexForFilePath(const QString& filePath) {
@@ -1637,6 +1662,7 @@ void MainWindow::loadSession() {
 
     const QString requestedActiveId = m_sessionManager->activeDocumentId();
     const QVector<RecoveryDocument> recovered = m_sessionManager->documents();
+    m_loadingSession = true;
     for (const RecoveryDocument &document : recovered) {
         createNewTab(document.filePath, document.id, document.untitledNumber, false);
         DocumentTab *tab = getCurrentTab();
@@ -1672,6 +1698,7 @@ void MainWindow::loadSession() {
             document.recoveryState == RecoveryState::SnapshotUnreadable);
         tab->setSessionManager(m_sessionManager);
     }
+    m_loadingSession = false;
 
     if (tabWidget->count() == 0)
         createNewTab();
