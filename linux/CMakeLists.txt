@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-find_package(Qt6 COMPONENTS Widgets Core5Compat PrintSupport REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Core5Compat PrintSupport Concurrent REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(CMAKE_AUTOMOC ON)
@@ -46,6 +46,7 @@ list(FILTER LEXILLA_LEXER_SOURCES EXCLUDE REGEX ".*/LexUser\\.cxx$")
 
 add_library(npp_linux_support STATIC
     findreplace.cpp
+    searchmanager.cpp
     sessionmanager.cpp
     functionlist.cpp
     filebrowser.cpp
@@ -79,7 +80,7 @@ target_include_directories(npp_linux_support PUBLIC
 target_compile_definitions(npp_linux_support PUBLIC
     SCINTILLA_QT MAKING_LIBRARY=1 LEXILLA_STATIC=1 LINUX_BUILD=1)
 target_compile_options(npp_linux_support PRIVATE -include cstdint)
-target_link_libraries(npp_linux_support PUBLIC Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport)
+target_link_libraries(npp_linux_support PUBLIC Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport Qt6::Concurrent)
 target_compile_features(npp_linux_support PUBLIC cxx_std_17)
 
 add_library(npp_linux_app STATIC mainwindow.cpp)
@@ -89,6 +90,11 @@ add_executable(npp_linux main.cpp resources.qrc)
 target_link_libraries(npp_linux PRIVATE npp_linux_app)
 
 if(BUILD_TESTING)
+    add_executable(linux_search_tests tests/searchtests.cpp)
+    target_link_libraries(linux_search_tests PRIVATE npp_linux_app)
+    add_test(NAME linux_search_tests COMMAND linux_search_tests)
+    set_tests_properties(linux_search_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
     add_executable(linux_encoding_eol_tests tests/encodingeoltests.cpp)
     target_link_libraries(linux_encoding_eol_tests PRIVATE npp_linux_app)
     add_test(NAME linux_encoding_eol_tests COMMAND linux_encoding_eol_tests)

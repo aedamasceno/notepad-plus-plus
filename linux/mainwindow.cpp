@@ -5,6 +5,7 @@
 #include <QToolBar>
 #include <QAction>
 #include <QActionGroup>
+#include <QAbstractButton>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QInputDialog>
@@ -30,6 +31,8 @@
 #include <QKeySequence>
 #include <QIcon>
 #include <QTimer>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QSettings>
 #include <QSet>
 #include <QDir>
@@ -46,6 +49,7 @@
 #include "macromanager.h"
 #include "dualviewmanager.h"
 #include "documentformat.h"
+#include "searchmanager.h"
 
 // Include Scintilla ILexer header before Lexilla.h
 #include "ILexer.h"
@@ -65,6 +69,11 @@ struct LogicalDocumentState {
     DocumentFormat::TextEncoding encoding = DocumentFormat::TextEncoding::Utf8;
     DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
     DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
+};
+
+struct FileSearchProgressState {
+    std::atomic_int files{0};
+    std::atomic<qint64> bytes{0};
 };
 
 class DocumentTab : public QWidget {
@@ -553,6 +562,13 @@ public:
         m_panelContentTimer.setInterval(100);
         connect(&m_panelContentTimer, &QTimer::timeout,
                 this, &MainWindow::refreshPanelContent);
+        m_fileSearchProgressTimer.setInterval(100);
+        connect(&m_fileSearchProgressTimer, &QTimer::timeout, this, [this] {
+            if (m_fileSearchProgress)
+                statusBar->showMessage(tr("Searching… %1 files, %2 bytes")
+                    .arg(m_fileSearchProgress->files.load())
+                    .arg(m_fileSearchProgress->bytes.load()));
+        });
         // Load session on startup
         loadSession();
         findReplaceDialog = new FindReplaceDialog(this);
@@ -561,6 +577,22 @@ public:
         connect(findReplaceDialog, &FindReplaceDialog::replace, this, &MainWindow::replace);
         connect(findReplaceDialog, &FindReplaceDialog::replaceAll, this, &MainWindow::replaceAll);
         connect(findReplaceDialog, &FindReplaceDialog::closed, this, &MainWindow::findReplaceClosed);
+        connect(findReplaceDialog, &FindReplaceDialog::countRequested, this, [this] {
+            if (auto *tab = getCurrentTab()) { QString error; const int matches=m_searchManager.count(tab->getEditor(), searchRequest(), &error); statusBar->showMessage(error.isEmpty()?tr("%1 matches").arg(matches):error,5000); }
+        });
+        connect(findReplaceDialog, &FindReplaceDialog::findAllCurrentRequested, this, [this] {
+            if (auto *tab = getCurrentTab()) { QString error; auto results=m_searchManager.findAll(tab->getEditor(), searchRequest(), tab->documentId(), QFileInfo(tab->getFilePath()).fileName(), tab->getFilePath(), &error); showSearchResults(results); if(!error.isEmpty())statusBar->showMessage(error,5000); }
+        });
+        connect(findReplaceDialog, &FindReplaceDialog::findAllOpenRequested, this, [this] {
+            QVector<OpenSearchDocument> docs; for (auto *tab : documentViews()) docs.push_back({tab->documentId(), tab->getFilePath(), QFileInfo(tab->getFilePath()).fileName(), tab->getEditor()});
+            QString error; showSearchResults(m_searchManager.findAllOpen(docs, searchRequest(true), &error)); if(!error.isEmpty())statusBar->showMessage(error,5000);
+        });
+        connect(findReplaceDialog, &FindReplaceDialog::findInFilesRequested, this, [this] {
+            FileSearchRequest r; r.pattern=findReplaceDialog->findText(); r.directory=findReplaceDialog->directory(); r.filters=findReplaceDialog->filters(); r.mode=findReplaceDialog->searchMode(); r.options={findReplaceDialog->matchCase(),findReplaceDialog->wholeWord()}; r.recursive=findReplaceDialog->recursive();
+            startFileSearch(r);
+        });
+        connect(findReplaceDialog, &FindReplaceDialog::markAllRequested, this, [this] { if(auto *tab=getCurrentTab()) m_searchManager.markAll(tab->getEditor(),searchRequest()); });
+        connect(findReplaceDialog, &FindReplaceDialog::clearMarksRequested, this, [this] { if(auto *tab=getCurrentTab()) m_searchManager.clearMarks(tab->getEditor()); });
 
         QSettings settings;
         restoreGeometry(settings.value(QStringLiteral("mainWindow/geometry")).toByteArray());
@@ -570,6 +602,7 @@ public:
         refreshPanels();
     }
     ~MainWindow() override {
+        if (m_fileSearchCancellation) m_fileSearchCancellation->store(true);
         for (DocumentTab *tab : documentViews()) {
             QObject::disconnect(tab->getEditor(), nullptr, this, nullptr);
             tab->setSessionManager(nullptr);
@@ -578,6 +611,7 @@ public:
     bool openPath(const QString &path, QString *error = nullptr);
     bool saveCurrent(QString *error = nullptr);
     bool saveCurrentAs(const QString &path, QString *error = nullptr);
+    void startFileSearch(FileSearchRequest request);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -670,6 +704,10 @@ private:
     void updateMacroActions();
     void rebuildSavedMacroMenu();
     void updateFormatActions();
+    SearchRequest searchRequest(bool wholeDocument = false) const;
+    void showSearchResults(const QVector<SearchResultItem> &results);
+    void navigateSearchResult(int index);
+    void prefillSearchFromSelection();
 
     // Session management
     CheckpointStatus saveSession();
@@ -716,6 +754,15 @@ private:
     // Search menu actions
     QAction *findAction;
     QAction *replaceAction;
+    QAction *findNextAction;
+    QAction *findPreviousAction;
+    QAction *findInFilesAction;
+    QAction *markAction;
+    QAction *countAction;
+    QAction *findAllCurrentAction;
+    QAction *findAllOpenAction;
+    QAction *replaceAllAction;
+    QAction *clearMarksAction;
 
     // Additional toolbar actions (unimplemented)
     QAction *closeAction;
@@ -753,6 +800,17 @@ private:
 
     // Find/Replace dialog
     FindReplaceDialog *findReplaceDialog;
+    SearchManager m_searchManager;
+    QDockWidget *m_searchResultsDock = nullptr;
+    QTreeWidget *m_searchResults = nullptr;
+    QVector<SearchResultItem> m_searchResultItems;
+    std::shared_ptr<std::atomic_bool> m_fileSearchCancellation;
+    std::shared_ptr<FileSearchProgressState> m_fileSearchProgress;
+    QTimer m_fileSearchProgressTimer;
+    quint64 m_fileSearchGeneration = 0;
+    mutable QString m_selectionSearchDocument;
+    mutable SearchRange m_selectionSearchRange;
+    mutable SearchRange m_lastSearchSelection{-1, -1};
 
     // Session manager
     SessionManager* m_sessionManager;
@@ -844,14 +902,25 @@ void MainWindow::setupUI() {
     documentMapWidget = new DocumentMap(this);
     fileBrowserWidget = new FileBrowser(this);
     documentListWidget = new DocumentList(this);
+    m_searchResultsDock = new QDockWidget(tr("Search Results"), this);
+    m_searchResultsDock->setObjectName(QStringLiteral("searchResultsDock"));
+    m_searchResults = new QTreeWidget(m_searchResultsDock);
+    m_searchResults->setObjectName(QStringLiteral("searchResultsTree"));
+    m_searchResults->setHeaderLabels({tr("Document"), tr("Line"), tr("Column"), tr("Preview")});
+    m_searchResultsDock->setWidget(m_searchResults);
     addDockWidget(Qt::LeftDockWidgetArea, functionListWidget);
     addDockWidget(Qt::LeftDockWidgetArea, fileBrowserWidget);
     addDockWidget(Qt::RightDockWidgetArea, documentMapWidget);
     addDockWidget(Qt::RightDockWidgetArea, documentListWidget);
+    addDockWidget(Qt::BottomDockWidgetArea, m_searchResultsDock);
     functionListWidget->hide();
     documentMapWidget->hide();
     fileBrowserWidget->hide();
     documentListWidget->hide();
+    m_searchResultsDock->hide();
+    connect(m_searchResults, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem *item) {
+        navigateSearchResult(m_searchResults->indexOfTopLevelItem(item));
+    });
 
     connect(documentListWidget, &DocumentList::documentActivated, this, [this](int index) {
         if (index < 0 || index >= m_documentListIds.size()) return;
@@ -894,6 +963,17 @@ void MainWindow::setupActions() {
     // Search actions
     findAction = new QAction("&Find", this);
     replaceAction = new QAction("&Replace", this);
+    findAction->setObjectName(QStringLiteral("findAction"));
+    replaceAction->setObjectName(QStringLiteral("replaceAction"));
+    findNextAction = new QAction(tr("Find Next"), this); findNextAction->setObjectName(QStringLiteral("findNextAction"));
+    findPreviousAction = new QAction(tr("Find Previous"), this); findPreviousAction->setObjectName(QStringLiteral("findPreviousAction"));
+    findInFilesAction = new QAction(tr("Find in Files"), this); findInFilesAction->setObjectName(QStringLiteral("findInFilesAction"));
+    markAction = new QAction(tr("Mark"), this); markAction->setObjectName(QStringLiteral("markAction"));
+    countAction = new QAction(tr("Count"), this); countAction->setObjectName(QStringLiteral("countAction"));
+    findAllCurrentAction = new QAction(tr("Find All in Current Document"), this); findAllCurrentAction->setObjectName(QStringLiteral("findAllCurrentAction"));
+    findAllOpenAction = new QAction(tr("Find All in All Open Documents"), this); findAllOpenAction->setObjectName(QStringLiteral("findAllOpenAction"));
+    replaceAllAction = new QAction(tr("Replace All"), this); replaceAllAction->setObjectName(QStringLiteral("replaceAllAction"));
+    clearMarksAction = new QAction(tr("Clear Marks"), this); clearMarksAction->setObjectName(QStringLiteral("clearMarksAction"));
 
     // Additional toolbar actions (unimplemented)
     closeAction = new QAction("Close", this);
@@ -990,6 +1070,15 @@ void MainWindow::setupActions() {
     // Connect search actions
     connect(findAction, &QAction::triggered, this, &MainWindow::find);
     connect(replaceAction, &QAction::triggered, this, &MainWindow::showReplaceDialog);
+    connect(findNextAction, &QAction::triggered, this, [this] { findReplaceDialog->rememberInputs(); findNext(); });
+    connect(findPreviousAction, &QAction::triggered, this, [this] { findReplaceDialog->rememberInputs(); findPrevious(); });
+    connect(findInFilesAction, &QAction::triggered, this, [this] { findReplaceDialog->showFindInFiles(); });
+    connect(markAction, &QAction::triggered, this, [this] { findReplaceDialog->showMark(); });
+    connect(countAction, &QAction::triggered, this, [this] { findReplaceDialog->rememberInputs(); emit findReplaceDialog->countRequested(); });
+    connect(findAllCurrentAction, &QAction::triggered, this, [this] { findReplaceDialog->rememberInputs(); emit findReplaceDialog->findAllCurrentRequested(); });
+    connect(findAllOpenAction, &QAction::triggered, this, [this] { findReplaceDialog->rememberInputs(); emit findReplaceDialog->findAllOpenRequested(); });
+    connect(replaceAllAction, &QAction::triggered, this, [this] { findReplaceDialog->rememberInputs(); replaceAll(); });
+    connect(clearMarksAction, &QAction::triggered, this, [this] { emit findReplaceDialog->clearMarksRequested(); });
 
     // Connect tab management actions
     connect(closeAction, &QAction::triggered, this, &MainWindow::closeTabAction);
@@ -1061,6 +1150,16 @@ void MainWindow::setupActions() {
 
     searchMenu->addAction(findAction);
     searchMenu->addAction(replaceAction);
+    searchMenu->addAction(findNextAction);
+    searchMenu->addAction(findPreviousAction);
+    searchMenu->addAction(countAction);
+    searchMenu->addAction(findAllCurrentAction);
+    searchMenu->addAction(findAllOpenAction);
+    searchMenu->addAction(replaceAllAction);
+    searchMenu->addSeparator();
+    searchMenu->addAction(findInFilesAction);
+    searchMenu->addAction(markAction);
+    searchMenu->addAction(clearMarksAction);
     viewMenu->addAction(moveToOtherViewAction);
     viewMenu->addAction(cloneToOtherViewAction);
     viewMenu->addAction(syncVerticalAction);
@@ -1141,6 +1240,8 @@ void MainWindow::setupActions() {
     selectAllAction->setShortcut(QKeySequence::SelectAll);
     findAction->setShortcut(QKeySequence::Find);
     replaceAction->setShortcut(QKeySequence("Ctrl+H"));
+    findNextAction->setShortcut(QKeySequence(Qt::Key_F3));
+    findPreviousAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F3));
     zoomInAction->setShortcut(QKeySequence("Ctrl++"));
     zoomOutAction->setShortcut(QKeySequence("Ctrl+-"));
 
@@ -1318,24 +1419,16 @@ void MainWindow::find() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
 
-    // Show find dialog
+    prefillSearchFromSelection();
     findReplaceDialog->showFind();
-    findReplaceDialog->setFindText("");
-    findReplaceDialog->show();
-    findReplaceDialog->raise();
-    findReplaceDialog->activateWindow();
 }
 
 void MainWindow::showReplaceDialog() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
 
-    // Show replace dialog
+    prefillSearchFromSelection();
     findReplaceDialog->showReplace();
-    findReplaceDialog->setFindText("");
-    findReplaceDialog->show();
-    findReplaceDialog->raise();
-    findReplaceDialog->activateWindow();
 }
 
 void MainWindow::toggleWordWrap() {
@@ -2056,184 +2149,82 @@ void MainWindow::loadSession() {
 void MainWindow::findNext() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-
-    if (findText.isEmpty()) return;
-
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
+    auto *editor = currentTab->getEditor();
+    const SearchRequest request = searchRequest();
+    const qint64 selectionStart = editor->send(SCI_GETSELECTIONSTART);
+    const qint64 selectionEnd = editor->send(SCI_GETSELECTIONEND);
+    qint64 position = selectionEnd;
+    if (findReplaceDialog->inSelection() &&
+        selectionStart == request.range.start && selectionEnd == request.range.end) {
+        position = request.range.start;
+    } else if (selectionStart == selectionEnd) {
+        position = editor->send(SCI_GETCURRENTPOS);
     }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-
-    // Set target range to search from current position to end of document
-    editor->send(SCI_SETTARGETSTART, currentPos);
-    editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
-    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-
-    // Perform search
-    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET,
-        static_cast<Scintilla::Position>(findText.length()),
-        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-
-    if (foundPos != -1) {
-        // Select the match
-        Scintilla::Position endPos = foundPos + findText.length();
-        editor->send(SCI_SETSEL, foundPos, endPos);
-        editor->send(SCI_SCROLLCARET);
-    } else {
-        // Wrap around if enabled
-        if (findReplaceDialog->wrapAround()) {
-            editor->send(SCI_SETTARGETSTART, 0);
-            editor->send(SCI_SETTARGETEND, currentPos);
-            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-
-            foundPos = editor->send(SCI_SEARCHINTARGET,
-                static_cast<Scintilla::Position>(findText.length()),
-                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-
-            if (foundPos != -1) {
-                Scintilla::Position endPos = foundPos + findText.length();
-                editor->send(SCI_SETSEL, foundPos, endPos);
-                editor->send(SCI_SCROLLCARET);
-            }
-        }
-    }
+    QString error; auto hit = m_searchManager.findNext(editor, request, position, findReplaceDialog->wrapAround(), &error);
+    if (hit) { editor->send(SCI_SETSEL, hit->start, hit->end()); m_lastSearchSelection={hit->start,hit->end()}; editor->send(SCI_SCROLLCARET); }
+    else statusBar->showMessage(error.isEmpty()?tr("No matches found"):error,5000);
 }
 
 void MainWindow::findPrevious() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-
-    if (findText.isEmpty()) return;
-
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
-    }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-
-    // Set target range to search from beginning to current position
-    editor->send(SCI_SETTARGETSTART, 0);
-    editor->send(SCI_SETTARGETEND, currentPos);
-    editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-
-    // Perform search backwards
-    Scintilla::Position foundPos = editor->send(SCI_SEARCHINTARGET,
-        static_cast<Scintilla::Position>(findText.length()),
-        reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-
-    if (foundPos != -1) {
-        // Select the match
-        Scintilla::Position endPos = foundPos + findText.length();
-        editor->send(SCI_SETSEL, foundPos, endPos);
-        editor->send(SCI_SCROLLCARET);
-    } else {
-        // Wrap around if enabled
-        if (findReplaceDialog->wrapAround()) {
-            editor->send(SCI_SETTARGETSTART, currentPos);
-            editor->send(SCI_SETTARGETEND, editor->send(SCI_GETTEXTLENGTH));
-            editor->send(SCI_SETSEARCHFLAGS, searchFlags);
-
-            foundPos = editor->send(SCI_SEARCHINTARGET,
-                static_cast<Scintilla::Position>(findText.length()),
-                reinterpret_cast<sptr_t>(findText.toStdString().c_str()));
-
-            if (foundPos != -1) {
-                Scintilla::Position endPos = foundPos + findText.length();
-                editor->send(SCI_SETSEL, foundPos, endPos);
-                editor->send(SCI_SCROLLCARET);
-            }
-        }
-    }
+    auto *editor = currentTab->getEditor();
+    SearchRequest request = searchRequest(); request.direction = SearchDirection::Backward;
+    const qint64 selectionStart = editor->send(SCI_GETSELECTIONSTART);
+    const qint64 selectionEnd = editor->send(SCI_GETSELECTIONEND);
+    const qint64 position = findReplaceDialog->inSelection() &&
+            selectionStart == request.range.start && selectionEnd == request.range.end
+        ? request.range.end : selectionStart;
+    QString error; auto hit = m_searchManager.findNext(editor, request, position, findReplaceDialog->wrapAround(), &error);
+    if (hit) { editor->send(SCI_SETSEL, hit->start, hit->end()); m_lastSearchSelection={hit->start,hit->end()}; editor->send(SCI_SCROLLCARET); }
+    else statusBar->showMessage(error.isEmpty()?tr("No matches found"):error,5000);
 }
 
 void MainWindow::replace() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-    QString findText = findReplaceDialog->findText();
-    QString replaceText = findReplaceDialog->replaceText();
-
-    if (findText.isEmpty()) return;
-
-    // Set up search flags
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase()) {
-        searchFlags |= SCFIND_MATCHCASE;
+    auto *editor = currentTab->getEditor();
+    SearchRequest request = searchRequest();
+    const qint64 selectionStart = editor->send(SCI_GETSELECTIONSTART);
+    const qint64 selectionEnd = editor->send(SCI_GETSELECTIONEND);
+    if (findReplaceDialog->inSelection() &&
+        selectionStart == request.range.start && selectionEnd == request.range.end &&
+        !m_searchManager.selectionMatches(editor, request)) {
+        editor->send(SCI_SETSEL, request.range.start, request.range.start);
     }
-    if (findReplaceDialog->wholeWord()) {
-        searchFlags |= SCFIND_WHOLEWORD;
-    }
-
-    // Get current position
-    Scintilla::Position currentPos = editor->send(SCI_GETCURRENTPOS);
-
-    // Check if we're at a match
-    Scintilla::Position anchor = editor->send(SCI_GETANCHOR);
-    Scintilla::Position selStart = editor->send(SCI_GETSELECTIONSTART);
-    Scintilla::Position selEnd = editor->send(SCI_GETSELECTIONEND);
-
-    bool isSelectionMatch = (selStart != selEnd) &&
-        (selStart == anchor) &&
-        (selEnd - selStart == static_cast<Scintilla::Position>(findText.length()));
-
-    if (isSelectionMatch) {
-        // Get the text at current selection
-        char* buffer = new char[findText.length() + 1];
-        editor->send(SCI_GETTEXT, findText.length() + 1, reinterpret_cast<sptr_t>(buffer));
-        QString selectedText(buffer);
-        delete[] buffer;
-
-        if (selectedText == findText) {
-            // Replace the selection
-            editor->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>(replaceText.toStdString().c_str()));
-            editor->send(SCI_SETSEL, selStart, selStart + replaceText.length());
-
-            // Continue searching from after replacement
-            findNext();
+    const qint64 oldLength = editor->send(SCI_GETTEXTLENGTH);
+    QString error;
+    auto hit = m_searchManager.replaceNext(editor, request, findReplaceDialog->replaceText(),
+                                           findReplaceDialog->wrapAround(), &error);
+    const qint64 newLength = editor->send(SCI_GETTEXTLENGTH);
+    if (findReplaceDialog->inSelection())
+        m_selectionSearchRange.end += newLength - oldLength;
+    if (hit)
+        m_lastSearchSelection = {hit->start, hit->end()};
+    else {
+        if (findReplaceDialog->inSelection() && newLength != oldLength) {
+            m_lastSearchSelection = {editor->send(SCI_GETSELECTIONSTART),
+                                     editor->send(SCI_GETSELECTIONEND)};
         }
-    } else {
-        // Perform search and replace
-        findNext();
+        statusBar->showMessage(error.isEmpty() ? tr("No matches found") : error, 5000);
     }
+    updateStatusBar(); refreshPanels();
 }
 
 void MainWindow::replaceAll() {
     DocumentTab* currentTab = getCurrentTab();
     if (!currentTab) return;
 
-    ScintillaEditBase* editor = currentTab->getEditor();
-    const QByteArray findText = findReplaceDialog->findText().toUtf8();
-    const QByteArray replaceText = findReplaceDialog->replaceText().toUtf8();
-
-    if (findText.isEmpty()) return;
-
-    int searchFlags = 0;
-    if (findReplaceDialog->matchCase())
-        searchFlags |= SCFIND_MATCHCASE;
-    if (findReplaceDialog->wholeWord())
-        searchFlags |= SCFIND_WHOLEWORD;
-
-    EditorUtils::replaceAll(editor, findText, replaceText, searchFlags);
+    auto *editor = currentTab->getEditor();
+    const SearchRequest request = searchRequest();
+    const qint64 oldLength = editor->send(SCI_GETTEXTLENGTH);
+    auto result = m_searchManager.replaceAll(editor, request, findReplaceDialog->replaceText());
+    if (findReplaceDialog->inSelection()) {
+        m_selectionSearchRange.end += editor->send(SCI_GETTEXTLENGTH) - oldLength;
+        editor->send(SCI_SETSEL, m_selectionSearchRange.start, m_selectionSearchRange.end);
+        m_lastSearchSelection = m_selectionSearchRange;
+    }
+    statusBar->showMessage(result.error.isEmpty() ? tr("Replaced %1 occurrence(s)").arg(result.count) : result.error, 5000);
     updateStatusBar();
     refreshPanels();
 }
@@ -2601,6 +2592,126 @@ void MainWindow::findReplaceClosed() {
     // No implementation needed for this function
 }
 
+SearchRequest MainWindow::searchRequest(bool wholeDocument) const
+{
+    SearchRequest request;
+    request.pattern = findReplaceDialog->findText();
+    request.mode = findReplaceDialog->searchMode();
+    request.options = {findReplaceDialog->matchCase(), findReplaceDialog->wholeWord()};
+    if (auto *tab = getCurrentTab()) {
+        auto *editor = tab->getEditor();
+        if (!wholeDocument && findReplaceDialog->inSelection()) {
+            const SearchRange selection{editor->send(SCI_GETSELECTIONSTART), editor->send(SCI_GETSELECTIONEND)};
+            if(m_selectionSearchDocument!=tab->documentId() ||
+               selection.start!=m_lastSearchSelection.start || selection.end!=m_lastSearchSelection.end) {
+                m_selectionSearchDocument=tab->documentId();
+                m_selectionSearchRange=selection;
+            }
+            request.range=m_selectionSearchRange;
+        } else {
+            request.range = {0, editor->send(SCI_GETTEXTLENGTH)};
+            m_lastSearchSelection={-1,-1};
+        }
+    }
+    return request;
+}
+
+void MainWindow::prefillSearchFromSelection()
+{
+    auto *tab = getCurrentTab(); if (!tab) return;
+    auto *editor = tab->getEditor();
+    const qint64 start = editor->send(SCI_GETSELECTIONSTART), end = editor->send(SCI_GETSELECTIONEND);
+    if (end <= start || end - start > 500) return;
+    QByteArray bytes(end - start + 1, '\0');
+    editor->send(SCI_GETSELTEXT, 0, reinterpret_cast<sptr_t>(bytes.data())); bytes.chop(1);
+    if (!bytes.contains('\n') && !bytes.contains('\r')) findReplaceDialog->setFindText(QString::fromUtf8(bytes));
+}
+
+void MainWindow::showSearchResults(const QVector<SearchResultItem> &results)
+{
+    m_searchResultItems = results; m_searchResults->clear();
+    for (const auto &result : results) {
+        const QString label = result.name.isEmpty() ? result.path : result.name;
+        m_searchResults->addTopLevelItem(new QTreeWidgetItem({label, QString::number(result.line),
+                                                              QString::number(result.column), result.preview}));
+    }
+    m_searchResultsDock->show(); m_searchResultsDock->raise();
+}
+
+void MainWindow::startFileSearch(FileSearchRequest request)
+{
+    if (m_fileSearchCancellation) m_fileSearchCancellation->store(true);
+    const quint64 generation = ++m_fileSearchGeneration;
+    m_fileSearchCancellation = std::make_shared<std::atomic_bool>(false);
+    m_fileSearchProgress = std::make_shared<FileSearchProgressState>();
+    request.cancellation = m_fileSearchCancellation;
+    const auto originalProgress = request.progress;
+    const auto progress = m_fileSearchProgress;
+    request.progress = [originalProgress, progress](int files, qint64 bytes) {
+        progress->files.store(files);
+        progress->bytes.store(bytes);
+        if (originalProgress) originalProgress(files, bytes);
+    };
+    findReplaceDialog->setFindText(request.pattern);
+    findReplaceDialog->setDirectory(request.directory);
+    findReplaceDialog->setFileSearchRunning(true);
+    statusBar->showMessage(tr("Searching… 0 files, 0 bytes"));
+    m_fileSearchProgressTimer.start();
+
+    auto *watcher = new QFutureWatcher<FileSearchResult>(this);
+    connect(watcher, &QFutureWatcher<FileSearchResult>::finished, this,
+            [this, watcher, generation] {
+        const FileSearchResult found = watcher->result();
+        watcher->deleteLater();
+        if (generation != m_fileSearchGeneration) return;
+        m_fileSearchProgressTimer.stop();
+        m_fileSearchCancellation.reset();
+        m_fileSearchProgress.reset();
+        findReplaceDialog->setFileSearchRunning(false);
+        if (found.cancelled) {
+            statusBar->showMessage(tr("File search cancelled"), 5000);
+            return;
+        }
+        showSearchResults(found.matches);
+        QString message=tr("%1 matches; %2 skipped").arg(found.matches.size()).arg(found.skippedBinary+found.skippedUnreadable);
+        if(found.limited)message+=tr("; result limit reached");
+        if(!found.errors.isEmpty())message+=tr("; %1 error(s): %2").arg(found.errors.size()).arg(found.errors.first());
+        statusBar->showMessage(message,10000);
+    });
+    watcher->setFuture(QtConcurrent::run([request] {
+        return SearchManager().findInFiles(request);
+    }));
+}
+
+void MainWindow::navigateSearchResult(int index)
+{
+    if (index < 0 || index >= m_searchResultItems.size()) return;
+    const SearchResultItem result = m_searchResultItems.at(index);
+    DocumentTab *target = nullptr;
+    QTabWidget *targetPane = nullptr;
+    QTabWidget *preferred = dualViewManager->activePane();
+    for (QTabWidget *pane : {preferred, dualViewManager->otherPane(preferred)}) {
+        for (int i = 0; i < pane->count(); ++i) {
+            auto *candidate = qobject_cast<DocumentTab *>(pane->widget(i));
+            if (candidate && candidate->documentId() == result.documentId) {
+                target = candidate; targetPane = pane; break;
+            }
+        }
+        if (target) break;
+    }
+    if (!target && !result.path.isEmpty() && result.fromFileSearch) {
+        QString error; if (!openPath(result.path, &error)) { statusBar->showMessage(error, 5000); return; }
+        target = getCurrentTab(); targetPane = dualViewManager->activePane();
+    }
+    if (!target) { statusBar->showMessage(tr("The search result document is no longer open"), 5000); return; }
+    dualViewManager->activate(targetPane, targetPane->indexOf(target));
+    if (!m_searchManager.resultStillValid(target->getEditor(), result)) {
+        statusBar->showMessage(tr("The document changed since the search"), 5000); return;
+    }
+    target->getEditor()->send(SCI_SETSEL, result.start, result.start + result.length);
+    target->getEditor()->send(SCI_SCROLLCARET);
+}
+
 QMainWindow *createMainWindow(QWidget *parent)
 {
     return new MainWindow(parent);
@@ -2634,6 +2745,12 @@ bool saveCurrentFileAsInMainWindow(QMainWindow *window, const QString &path, QSt
         return false;
     }
     return mainWindow->saveCurrentAs(path, error);
+}
+
+void startFileSearchInMainWindow(QMainWindow *window, const FileSearchRequest &request)
+{
+    if (auto *mainWindow = qobject_cast<MainWindow *>(window))
+        mainWindow->startFileSearch(request);
 }
 
 #include "mainwindow.moc"
