@@ -11,6 +11,8 @@
 #include <QSignalBlocker>
 #include <QSet>
 #include <QStandardPaths>
+#include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -41,6 +43,31 @@ QString stateDiagnostic(const RecoveryDocument &document)
         return {};
     }
     return {};
+}
+
+bool jsonInteger(const QJsonValue &value, qint64 minimum, qint64 maximum, qint64 *result)
+{
+    if (!value.isDouble())
+        return false;
+    const double number = value.toDouble();
+    if (!std::isfinite(number) || std::trunc(number) != number ||
+        number < double(minimum) || number > double(maximum))
+        return false;
+    if (result)
+        *result = qint64(number);
+    return true;
+}
+
+bool lowerHex(const QString &value, qsizetype length)
+{
+    if (value.size() != length)
+        return false;
+    for (const QChar character : value) {
+        if ((character < QLatin1Char('0') || character > QLatin1Char('9')) &&
+            (character < QLatin1Char('a') || character > QLatin1Char('f')))
+            return false;
+    }
+    return true;
 }
 }
 
@@ -95,6 +122,8 @@ void SessionManager::loadSession()
                 m_metadataDirty = true;
                 break;
             }
+            if (m_writesBlocked)
+                break;
         }
         return;
     }
@@ -143,8 +172,16 @@ void SessionManager::loadSession()
         }
         return;
     }
-    const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt();
-    if (schemaVersion != 2 && schemaVersion != SchemaVersion) {
+    qint64 parsedSchemaVersion = 0;
+    if (!jsonInteger(root.value(QStringLiteral("schemaVersion")), 2, SchemaVersion,
+                     &parsedSchemaVersion) ||
+        !root.value(QStringLiteral("activeDocumentId")).isString()) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Session schema metadata has invalid required types; recovery writes are disabled");
+        return;
+    }
+    const int schemaVersion = int(parsedSchemaVersion);
+    if (schemaVersion != 2 && schemaVersion != 3 && schemaVersion != SchemaVersion) {
         m_writesBlocked = true;
         m_diagnostics << QStringLiteral("Unsupported session schema retained at %1; recovery writes are disabled")
                              .arg(m_sessionFilePath);
@@ -157,9 +194,65 @@ void SessionManager::loadSession()
             m_activePane = QStringLiteral("primary");
             m_splitterOrientation = Qt::Horizontal;
             m_splitterSizes.clear();
+            if (canonicalizeLegacySnapshots(true))
+                m_metadataDirty = true;
         }
-    } else
-        loadVersion3(root);
+    } else if (schemaVersion == 3) {
+        if (loadVersion3(root) && canonicalizeLegacySnapshots())
+            m_metadataDirty = true;
+    }
+    else
+        loadVersion4(root);
+}
+
+bool SessionManager::loadVersion4(const QJsonObject &root)
+{
+    if (!loadVersion3(root))
+        return false;
+    QHash<QString, QJsonObject> storedById;
+    for (const QJsonValue &value : root.value(QStringLiteral("documents")).toArray()) {
+        if (value.isObject()) {
+            const QJsonObject object = value.toObject();
+            const QString id = object.value(QStringLiteral("id")).toString();
+            if (!storedById.contains(id))
+                storedById.insert(id, object);
+        }
+    }
+    for (RecoveryDocument &document : m_documents) {
+        const QJsonObject object = storedById.value(document.id);
+        DocumentFormat::TextEncoding encoding;
+        DocumentFormat::EolKind eol;
+        DocumentFormat::EolKind insertion;
+        if (object.isEmpty() ||
+            !DocumentFormat::encodingFromKey(object.value(QStringLiteral("encoding")).toString(), &encoding) ||
+            !DocumentFormat::eolFromKey(object.value(QStringLiteral("eol")).toString(), &eol) ||
+            !DocumentFormat::eolFromKey(object.value(QStringLiteral("insertionEol")).toString(), &insertion) ||
+            insertion == DocumentFormat::EolKind::None || insertion == DocumentFormat::EolKind::Mixed) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Encoding/EOL session metadata is malformed; metadata retained and recovery writes disabled");
+            return false;
+        }
+        document.encoding = encoding;
+        document.eol = eol;
+        document.insertionEol = insertion;
+        document.legacyEncodedSnapshot = false;
+        if (document.dirty && document.recoveryState != RecoveryState::SnapshotMissing &&
+            document.recoveryState != RecoveryState::SnapshotUnreadable) {
+            if (!contentAddressedSnapshotHash(document.id, document.snapshotPath)) {
+                document.recoveryState = RecoveryState::SnapshotUnreadable;
+                m_writesBlocked = true;
+                m_diagnostics << QStringLiteral("Canonical recovery snapshot path is malformed; metadata retained and recovery writes disabled");
+                continue;
+            }
+            const RecoveryReadResult recovered = readRecoveryContent(document);
+            if (!recovered.success) {
+                document.recoveryState = RecoveryState::SnapshotUnreadable;
+                m_writesBlocked = true;
+                m_diagnostics << stateDiagnostic(document);
+            }
+        }
+    }
+    return !m_writesBlocked;
 }
 
 bool SessionManager::loadVersion3(const QJsonObject &root)
@@ -235,7 +328,83 @@ bool SessionManager::loadVersion3(const QJsonObject &root)
         m_diagnostics << QStringLiteral("Dual-view active document assignment is malformed; metadata retained and recovery writes disabled");
         return false;
     }
+    // Schema 3 had no format fields. Detect its preserved bytes without writing
+    // anything; a later successful checkpoint performs the schema-4 migration.
+    for (RecoveryDocument &document : m_documents) {
+        document.legacyEncodedSnapshot = document.dirty;
+        const RecoveryReadResult content = readRecoveryContent(document);
+        if (!content.success)
+            continue;
+        const auto decoded = DocumentFormat::decode(content.content);
+        if (decoded.success) {
+            document.encoding = decoded.encoding;
+            document.eol = decoded.eol.kind;
+            document.insertionEol = decoded.eol.insertion;
+            document.legacyEncodedSnapshot = document.dirty;
+        }
+    }
     return true;
+}
+
+bool SessionManager::canonicalizeLegacySnapshots(bool allowMissingSnapshots)
+{
+    if (m_writesBlocked)
+        return false;
+
+    struct MigrationPlan {
+        int documentIndex = -1;
+        QString oldSnapshot;
+        QString newSnapshot;
+        DocumentFormat::DecodedDocument decoded;
+    };
+    QVector<MigrationPlan> plans;
+    bool allCanonicalized = true;
+    for (RecoveryDocument &document : m_documents) {
+        if (document.dirty)
+            document.legacyEncodedSnapshot = true;
+    }
+    for (int index = 0; index < m_documents.size(); ++index) {
+        RecoveryDocument &document = m_documents[index];
+        if (!document.dirty)
+            continue;
+        if (allowMissingSnapshots &&
+            document.recoveryState == RecoveryState::SnapshotMissing) {
+            allCanonicalized = false;
+            continue;
+        }
+        const RecoveryReadResult content = readRecoveryContent(document);
+        if (!content.success) {
+            document.recoveryState = RecoveryState::SnapshotUnreadable;
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Legacy recovery snapshot could not be read; source retained and migration blocked: %1")
+                                 .arg(document.id);
+            return false;
+        }
+        const DocumentFormat::DecodedDocument decoded = DocumentFormat::decode(content.content);
+        if (!decoded.success) {
+            document.recoveryState = RecoveryState::SnapshotUnreadable;
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Legacy recovery snapshot is not valid text; source retained and migration blocked: %1")
+                                 .arg(document.id);
+            return false;
+        }
+        plans.push_back({index, absoluteSnapshotPath(document),
+                         relativeSnapshotPath(document.id, decoded.utf8), decoded});
+    }
+
+    for (const MigrationPlan &plan : std::as_const(plans)) {
+        RecoveryDocument &document = m_documents[plan.documentIndex];
+        document.encoding = plan.decoded.encoding;
+        document.eol = plan.decoded.eol.kind;
+        document.insertionEol = plan.decoded.eol.insertion;
+        document.snapshotPath = plan.newSnapshot;
+        document.legacyEncodedSnapshot = false;
+        m_pendingSnapshots.insert(document.id, plan.decoded.utf8);
+        if (!plan.oldSnapshot.isEmpty() && plan.oldSnapshot != absoluteSnapshotPath(document) &&
+            QFileInfo::exists(plan.oldSnapshot) && !m_obsoleteSnapshots.contains(plan.oldSnapshot))
+            m_obsoleteSnapshots << plan.oldSnapshot;
+    }
+    return allCanonicalized;
 }
 
 bool SessionManager::loadVersion2(const QJsonObject &root)
@@ -257,39 +426,75 @@ bool SessionManager::loadVersion2(const QJsonObject &root)
             continue;
         }
         const QJsonObject object = value.toObject();
+        const QJsonValue idValue = object.value(QStringLiteral("id"));
+        const QJsonValue filePathValue = object.value(QStringLiteral("filePath"));
+        const QJsonValue untitledValue = object.value(QStringLiteral("untitledNumber"));
+        const QJsonValue dirtyValue = object.value(QStringLiteral("dirty"));
+        const QJsonValue snapshotValue = object.value(QStringLiteral("snapshot"));
+        const QJsonValue originalExistedValue = object.value(QStringLiteral("originalExisted"));
+        const QJsonValue originalSizeValue = object.value(QStringLiteral("originalSize"));
+        const QJsonValue originalMtimeValue = object.value(QStringLiteral("originalMtimeMs"));
+        const QJsonValue originalHashValue = object.value(QStringLiteral("originalSha256"));
+        qint64 untitledNumber = 0;
+        qint64 originalSize = -1;
+        qint64 originalMtime = -1;
+        if (!idValue.isString() || idValue.toString().isEmpty() ||
+            !filePathValue.isString() ||
+            !jsonInteger(untitledValue, 0, std::numeric_limits<int>::max(), &untitledNumber) ||
+            !dirtyValue.isBool() || !snapshotValue.isString() ||
+            !originalExistedValue.isBool() ||
+            !jsonInteger(originalSizeValue, -1, qint64(1) << 53, &originalSize) ||
+            !jsonInteger(originalMtimeValue, -1, qint64(1) << 53, &originalMtime) ||
+            !originalHashValue.isString()) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Rejected recovery document with invalid required field types; metadata retained and recovery writes disabled");
+            continue;
+        }
         RecoveryDocument document;
-        document.id = object.value(QStringLiteral("id")).toString();
+        document.id = idValue.toString();
         if (document.id.isEmpty() || seen.contains(document.id)) {
             m_writesBlocked = true;
             m_diagnostics << QStringLiteral("Ignored empty or duplicate recovery identity; metadata retained and recovery writes disabled");
             continue;
         }
         seen.insert(document.id);
-        document.filePath = object.value(QStringLiteral("filePath")).toString();
-        document.untitledNumber = object.value(QStringLiteral("untitledNumber")).toInt();
+        document.filePath = filePathValue.toString();
+        document.untitledNumber = int(untitledNumber);
         if (document.filePath.isEmpty()) {
             if (document.untitledNumber <= 0 || untitledNumbers.contains(document.untitledNumber)) {
                 m_writesBlocked = true;
                 m_diagnostics << QStringLiteral("Rejected non-positive or duplicate untitled document number; metadata retained and recovery writes disabled");
+                continue;
             } else {
                 untitledNumbers.insert(document.untitledNumber);
             }
         }
-        document.dirty = object.value(QStringLiteral("dirty")).toBool();
-        const QString storedSnapshot = object.value(QStringLiteral("snapshot")).toString();
-        if (!storedSnapshot.isEmpty() &&
-            !isManagedSnapshotPath(document.id, storedSnapshot)) {
+        document.dirty = dirtyValue.toBool();
+        const QString storedSnapshot = snapshotValue.toString();
+        if ((document.dirty && storedSnapshot.isEmpty()) ||
+            (!document.dirty && !storedSnapshot.isEmpty()) ||
+            (!storedSnapshot.isEmpty() && !isManagedSnapshotPath(document.id, storedSnapshot))) {
             m_writesBlocked = true;
-            m_diagnostics << QStringLiteral("Rejected unmanaged snapshot path for %1; metadata retained and recovery writes disabled")
+            m_diagnostics << QStringLiteral("Rejected inconsistent or unmanaged snapshot path for %1; metadata retained and recovery writes disabled")
                                  .arg(document.id);
+            continue;
         } else {
             document.snapshotPath = storedSnapshot;
         }
-        document.originalExisted = object.value(QStringLiteral("originalExisted")).toBool();
-        document.originalSize = qint64(object.value(QStringLiteral("originalSize")).toDouble(-1));
-        document.originalMtimeMs = qint64(object.value(QStringLiteral("originalMtimeMs")).toDouble(-1));
-        document.originalSha256 = QByteArray::fromHex(
-            object.value(QStringLiteral("originalSha256")).toString().toLatin1());
+        document.originalExisted = originalExistedValue.toBool();
+        document.originalSize = originalSize;
+        document.originalMtimeMs = originalMtime;
+        const QString originalHash = originalHashValue.toString();
+        const bool originalMetadataValid = document.originalExisted
+            ? document.originalSize >= 0 && document.originalMtimeMs >= 0 && lowerHex(originalHash, 64)
+            : document.originalSize == -1 && document.originalMtimeMs == -1 && originalHash.isEmpty();
+        if (!originalMetadataValid) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Rejected inconsistent original-file metadata; metadata retained and recovery writes disabled");
+            continue;
+        } else {
+            document.originalSha256 = QByteArray::fromHex(originalHash.toLatin1());
+        }
         assessRecoveryState(document);
         if (document.recoveryState == RecoveryState::SnapshotUnreadable)
             m_writesBlocked = true;
@@ -328,11 +533,15 @@ void SessionManager::updateDocument(const DocumentCheckpoint &checkpoint, const 
     if (document.filePath != checkpoint.filePath) {
         document.filePath = checkpoint.filePath;
         captureOriginalMetadata(document);
-    } else if (becameCleanAfterSave) {
+    } else if (becameCleanAfterSave || !checkpoint.dirty) {
         captureOriginalMetadata(document);
     }
     document.untitledNumber = checkpoint.untitledNumber;
     document.dirty = checkpoint.dirty;
+    document.encoding = checkpoint.encoding;
+    document.eol = checkpoint.eol;
+    document.insertionEol = checkpoint.insertionEol;
+    document.legacyEncodedSnapshot = false;
     document.recoveryState = RecoveryState::Ready;
     if (document.dirty) {
         const QString oldSnapshot = absoluteSnapshotPath(document);
@@ -486,6 +695,12 @@ bool SessionManager::isManagedSnapshotPath(const QString &id, const QString &pat
 {
     if (path == relativeSnapshotPath(id))
         return true;
+    return contentAddressedSnapshotHash(id, path);
+}
+
+bool SessionManager::contentAddressedSnapshotHash(const QString &id, const QString &path,
+                                                   QByteArray *hash) const
+{
     const QString idHash = QString::fromLatin1(
         QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex());
     const QString prefix = QStringLiteral("snapshots/%1-").arg(idHash);
@@ -496,9 +711,12 @@ bool SessionManager::isManagedSnapshotPath(const QString &id, const QString &pat
     if (contentHash.size() != 64)
         return false;
     for (const QChar character : contentHash) {
-        if (!character.isDigit() && (character < QLatin1Char('a') || character > QLatin1Char('f')))
+        if ((character < QLatin1Char('0') || character > QLatin1Char('9')) &&
+            (character < QLatin1Char('a') || character > QLatin1Char('f')))
             return false;
     }
+    if (hash)
+        *hash = QByteArray::fromHex(contentHash.toLatin1());
     return true;
 }
 
@@ -514,6 +732,7 @@ bool SessionManager::writeAtomic(const QString &path, const QByteArray &bytes, Q
 {
     QDir().mkpath(QFileInfo(path).absolutePath());
     QSaveFile file(path);
+    file.setDirectWriteFallback(false);
     if (!file.open(QIODevice::WriteOnly)) {
         if (error)
             *error = file.errorString();
@@ -547,6 +766,16 @@ CheckpointStatus SessionManager::writeCheckpoint()
     }
     if (!m_metadataDirty && m_pendingSnapshots.isEmpty())
         return CheckpointStatus::NoChanges;
+    for (const RecoveryDocument &document : std::as_const(m_documents)) {
+        if (document.dirty && document.legacyEncodedSnapshot) {
+            if (m_pendingSnapshots.isEmpty())
+                return CheckpointStatus::NoChanges;
+            const QString message = QStringLiteral("Recovery checkpoint blocked until the legacy snapshot can be replaced safely");
+            m_diagnostics << message;
+            emit checkpointFailed(message);
+            return CheckpointStatus::WritesBlocked;
+        }
+    }
 
     bool snapshotsOk = true;
     const auto pending = m_pendingSnapshots;
@@ -580,6 +809,9 @@ CheckpointStatus SessionManager::writeCheckpoint()
         object.insert(QStringLiteral("originalSize"), double(document.originalSize));
         object.insert(QStringLiteral("originalMtimeMs"), double(document.originalMtimeMs));
         object.insert(QStringLiteral("originalSha256"), QString::fromLatin1(document.originalSha256.toHex()));
+        object.insert(QStringLiteral("encoding"), DocumentFormat::encodingKey(document.encoding));
+        object.insert(QStringLiteral("eol"), DocumentFormat::eolKey(document.eol));
+        object.insert(QStringLiteral("insertionEol"), DocumentFormat::eolKey(document.insertionEol));
         documents.append(object);
     }
     QJsonObject root;
@@ -640,37 +872,100 @@ bool SessionManager::importLegacyDirectory(const QString &directory)
     if (!root.value(QStringLiteral("untitledTabs")).isArray())
         return false;
 
-    QSet<int> seen;
+    for (const QJsonValue &value : root.value(QStringLiteral("untitledTabs")).toArray()) {
+        if (!value.isObject()) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Legacy recovery manifest is malformed; source retained and migration blocked");
+            return false;
+        }
+        const QJsonObject old = value.toObject();
+        qint64 number = 0;
+        if (!jsonInteger(old.value(QStringLiteral("tabNumber")), 1,
+                         std::numeric_limits<int>::max(), &number) ||
+            !old.value(QStringLiteral("backupPath")).isString() ||
+            old.value(QStringLiteral("backupPath")).toString().isEmpty()) {
+            m_writesBlocked = true;
+            m_diagnostics << QStringLiteral("Legacy recovery manifest is malformed; source retained and migration blocked");
+            return false;
+        }
+    }
+
+    QVector<int> identityOrder;
+    QHash<int, QStringList> backupCandidates;
     for (const QJsonValue &value : root.value(QStringLiteral("untitledTabs")).toArray()) {
         const QJsonObject old = value.toObject();
         const int number = old.value(QStringLiteral("tabNumber")).toInt();
         const QString oldBackup = old.value(QStringLiteral("backupPath")).toString();
-        if (number <= 0 || oldBackup.isEmpty() || seen.contains(number))
-            continue;
-        QFile backup(oldBackup);
-        if (!backup.open(QIODevice::ReadOnly)) {
-            m_diagnostics << QStringLiteral("Legacy recovery backup is missing; source metadata retained: %1")
-                                 .arg(oldBackup);
-            continue;
+        if (!backupCandidates.contains(number))
+            identityOrder.push_back(number);
+        backupCandidates[number].push_back(oldBackup);
+    }
+
+    QVector<RecoveryDocument> importedDocuments;
+    QHash<QString, QByteArray> importedSnapshots;
+    bool incomplete = false;
+    for (int number : std::as_const(identityOrder)) {
+        bool imported = false;
+        QStringList failures;
+        for (const QString &oldBackup : std::as_const(backupCandidates[number])) {
+            QFile backup(oldBackup);
+            if (!backup.open(QIODevice::ReadOnly)) {
+                failures << QStringLiteral("Legacy recovery backup is unavailable; source retained and migration blocked: %1 (%2)")
+                                .arg(oldBackup, backup.errorString());
+                continue;
+            }
+            const QByteArray sourceBytes = backup.readAll();
+            if (backup.error() != QFileDevice::NoError) {
+                failures << QStringLiteral("Legacy recovery backup could not be read; source retained and migration blocked: %1 (%2)")
+                                .arg(oldBackup, backup.errorString());
+                continue;
+            }
+            const DocumentFormat::DecodedDocument decoded = DocumentFormat::decode(sourceBytes);
+            if (!decoded.success) {
+                failures << QStringLiteral("Legacy recovery backup is not valid text; source retained and migration blocked: %1")
+                                .arg(oldBackup);
+                continue;
+            }
+            RecoveryDocument document;
+            document.id = QStringLiteral("legacy-untitled-%1").arg(number);
+            document.untitledNumber = number;
+            document.dirty = true;
+            document.encoding = decoded.encoding;
+            document.eol = decoded.eol.kind;
+            document.insertionEol = decoded.eol.insertion;
+            document.snapshotPath = relativeSnapshotPath(document.id, decoded.utf8);
+            importedDocuments.push_back(document);
+            importedSnapshots.insert(document.id, decoded.utf8);
+            imported = true;
+            break;
         }
-        seen.insert(number);
-        RecoveryDocument document;
-        document.id = QStringLiteral("legacy-untitled-%1").arg(number);
-        document.untitledNumber = number;
-        document.dirty = true;
-        const QByteArray content = backup.readAll();
-        document.snapshotPath = relativeSnapshotPath(document.id, content);
-        m_documents.push_back(document);
-        m_pendingSnapshots.insert(document.id, content);
+        if (!imported) {
+            incomplete = true;
+            m_diagnostics.append(failures);
+        }
     }
+    if (incomplete) {
+        m_writesBlocked = true;
+        m_diagnostics << QStringLiteral("Legacy recovery migration requires every unique backup; no canonical recovery data was written");
+        return false;
+    }
+    if (importedDocuments.isEmpty())
+        return false;
+
+    m_documents = importedDocuments;
+    m_pendingSnapshots = importedSnapshots;
+    m_primaryDocumentIds.clear();
+    for (const RecoveryDocument &document : std::as_const(m_documents))
+        m_primaryDocumentIds << document.id;
+    m_secondaryDocumentIds.clear();
+    m_activePane = QStringLiteral("primary");
+    m_splitterOrientation = Qt::Horizontal;
+    m_splitterSizes.clear();
     const int activeNumber = root.value(QStringLiteral("activeTab")).toInt();
-    if (seen.contains(activeNumber))
+    if (backupCandidates.contains(activeNumber))
         m_activeDocumentId = QStringLiteral("legacy-untitled-%1").arg(activeNumber);
-    if (!m_documents.isEmpty()) {
-        m_diagnostics << QStringLiteral("Imported legacy recovery data without modifying %1").arg(directory);
-        return true;
-    }
-    return false;
+    m_diagnostics << QStringLiteral("Imported legacy recovery data without modifying %1").arg(directory);
+    return true;
 }
 
 int SessionManager::indexOf(const QString &id) const
@@ -705,13 +1000,31 @@ QString SessionManager::activeDocumentId() const
 
 RecoveryReadResult SessionManager::readRecoveryContent(const RecoveryDocument &document) const
 {
-    if (document.dirty && m_pendingSnapshots.contains(document.id))
-        return {true, m_pendingSnapshots.value(document.id), {}};
-    const QString path = document.dirty ? absoluteSnapshotPath(document) : document.filePath;
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {false, {}, file.errorString()};
-    return {true, file.readAll(), {}};
+    QByteArray bytes;
+    if (document.dirty && m_pendingSnapshots.contains(document.id)) {
+        bytes = m_pendingSnapshots.value(document.id);
+    } else {
+        const QString path = document.dirty ? absoluteSnapshotPath(document) : document.filePath;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return {false, {}, file.errorString()};
+        bytes = file.readAll();
+    }
+    if (document.dirty) {
+        QByteArray expectedHash;
+        const bool contentAddressed = contentAddressedSnapshotHash(
+            document.id, document.snapshotPath, &expectedHash);
+        if (contentAddressed &&
+            QCryptographicHash::hash(bytes, QCryptographicHash::Sha256) != expectedHash)
+            return {false, {}, QStringLiteral("Recovery snapshot content hash does not match its filename")};
+        if (document.legacyEncodedSnapshot)
+            return {true, bytes, {}};
+        if (!contentAddressed)
+            return {false, {}, QStringLiteral("Recovery snapshot path is not content-addressed")};
+        if (!DocumentFormat::isValidUtf8Text(bytes))
+            return {false, {}, QStringLiteral("Recovery snapshot is not canonical UTF-8 text")};
+    }
+    return {true, bytes, {}};
 }
 
 QStringList SessionManager::diagnostics() const

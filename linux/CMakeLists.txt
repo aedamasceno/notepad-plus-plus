@@ -52,6 +52,7 @@ add_library(npp_linux_support STATIC
     documentlist.cpp
     documentmap.cpp
     editorutils.cpp
+    documentformat.cpp
     printhelper.cpp
     macromanager.cpp
     dualviewmanager.cpp
@@ -88,6 +89,11 @@ add_executable(npp_linux main.cpp resources.qrc)
 target_link_libraries(npp_linux PRIVATE npp_linux_app)
 
 if(BUILD_TESTING)
+    add_executable(linux_encoding_eol_tests tests/encodingeoltests.cpp)
+    target_link_libraries(linux_encoding_eol_tests PRIVATE npp_linux_app)
+    add_test(NAME linux_encoding_eol_tests COMMAND linux_encoding_eol_tests)
+    set_tests_properties(linux_encoding_eol_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
     add_executable(linux_dualview_tests tests/dualviewtests.cpp)
     target_link_libraries(linux_dualview_tests PRIVATE npp_linux_app)
     add_test(NAME linux_dualview_tests COMMAND linux_dualview_tests)

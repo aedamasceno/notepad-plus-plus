@@ -4,6 +4,7 @@
 #include <QMenu>
 #include <QToolBar>
 #include <QAction>
+#include <QActionGroup>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QInputDialog>
@@ -44,6 +45,7 @@
 #include "editorutils.h"
 #include "macromanager.h"
 #include "dualviewmanager.h"
+#include "documentformat.h"
 
 // Include Scintilla ILexer header before Lexilla.h
 #include "ILexer.h"
@@ -60,6 +62,9 @@ struct LogicalDocumentState {
     bool recoveryCheckpointBlocked = false;
     bool requiresExplicitSave = false;
     SessionManager *sessionManager = nullptr;
+    DocumentFormat::TextEncoding encoding = DocumentFormat::TextEncoding::Utf8;
+    DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
+    DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
 };
 
 class DocumentTab : public QWidget {
@@ -111,10 +116,32 @@ public:
     void setRecoveryCheckpointBlocked(bool blocked) { m_state->recoveryCheckpointBlocked = blocked; }
     void setSessionManager(SessionManager* sessionManager) { m_state->sessionManager = sessionManager; }
     QSharedPointer<LogicalDocumentState> sharedState() const { return m_state; }
+    DocumentFormat::TextEncoding encoding() const { return m_state->encoding; }
+    DocumentFormat::EolKind eol() const { return m_state->eol; }
+    DocumentFormat::EolKind insertionEol() const { return m_state->insertionEol; }
+    void setDocumentFormat(DocumentFormat::TextEncoding encoding,
+                           DocumentFormat::EolKind eol,
+                           DocumentFormat::EolKind insertion) {
+        m_state->encoding = encoding;
+        m_state->eol = eol;
+        m_state->insertionEol = insertion;
+        editor->send(SCI_SETEOLMODE, insertion == DocumentFormat::EolKind::CrLf ? SC_EOL_CRLF :
+                                     insertion == DocumentFormat::EolKind::Cr ? SC_EOL_CR : SC_EOL_LF);
+    }
+    void refreshEolMetadata() {
+        const auto info = DocumentFormat::scanEols(EditorUtils::text(editor));
+        m_state->eol = info.kind;
+    }
+    void markMetadataDirty() {
+        m_state->requiresExplicitSave = true;
+        setDirty(true);
+        checkpoint();
+    }
     void checkpoint() {
         if (m_state->sessionManager && !m_state->recoveryCheckpointBlocked && !isDisposablePlaceholder()) {
             m_state->sessionManager->updateDocument(
-                {m_state->id, m_state->filePath, m_state->tabNumber, m_state->modified},
+                {m_state->id, m_state->filePath, m_state->tabNumber, m_state->modified,
+                 m_state->encoding, m_state->eol, m_state->insertionEol},
                 EditorUtils::text(editor));
         }
     }
@@ -122,6 +149,8 @@ public:
 private:
     void setupUI() {
         editor = new ScintillaEditBase(this);
+        editor->send(SCI_SETCODEPAGE, SC_CP_UTF8);
+        editor->send(SCI_SETEOLMODE, SC_EOL_LF);
 
         // Set up layout
         QVBoxLayout* layout = new QVBoxLayout();
@@ -162,6 +191,7 @@ private:
 
     void onTextChanged() {
         m_state->recoveryCheckpointBlocked = false;
+        refreshEolMetadata();
         checkpoint();
     }
 
@@ -545,6 +575,9 @@ public:
             tab->setSessionManager(nullptr);
         }
     }
+    bool openPath(const QString &path, QString *error = nullptr);
+    bool saveCurrent(QString *error = nullptr);
+    bool saveCurrentAs(const QString &path, QString *error = nullptr);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -596,6 +629,8 @@ private slots:
     void syncHorizontal();
     void moveToOtherView();
     void cloneToOtherView();
+    void setEncoding(DocumentFormat::TextEncoding encoding);
+    void convertEols(DocumentFormat::EolKind eol);
 
     // Find/Replace functions (restored)
     void findNext();
@@ -608,8 +643,8 @@ private:
     void setupUI();
     void setupActions();
     void updateWindowTitle();
-    bool loadFile(const QString &filePath);
-    bool saveFileToPath(const QString &filePath, DocumentTab *tab);
+    bool loadFile(const QString &filePath, QString *error = nullptr);
+    bool saveFileToPath(const QString &filePath, DocumentTab *tab, QString *error = nullptr);
     bool saveTab(DocumentTab *tab, bool forceSaveAs = false);
     void createNewTab(const QString& filePath = "", const QString &documentId = QString(),
                       int restoredUntitledNumber = 0, bool registerWithSession = true);
@@ -634,6 +669,7 @@ private:
     void navigateToLine(int line);
     void updateMacroActions();
     void rebuildSavedMacroMenu();
+    void updateFormatActions();
 
     // Session management
     CheckpointStatus saveSession();
@@ -704,6 +740,16 @@ private:
     QAction *syncHorizontalAction;
     QAction *moveToOtherViewAction;
     QAction *cloneToOtherViewAction;
+    QActionGroup *encodingActionGroup = nullptr;
+    QAction *encodingUtf8Action = nullptr;
+    QAction *encodingUtf8BomAction = nullptr;
+    QAction *encodingUtf16LeAction = nullptr;
+    QAction *encodingUtf16BeAction = nullptr;
+    QAction *encodingWindows1252Action = nullptr;
+    QActionGroup *eolActionGroup = nullptr;
+    QAction *eolCrLfAction = nullptr;
+    QAction *eolLfAction = nullptr;
+    QAction *eolCrAction = nullptr;
 
     // Find/Replace dialog
     FindReplaceDialog *findReplaceDialog;
@@ -879,6 +925,48 @@ void MainWindow::setupActions() {
     moveToOtherViewAction->setObjectName(QStringLiteral("moveToOtherViewAction"));
     cloneToOtherViewAction = new QAction(tr("Clone to Other View"), this);
     cloneToOtherViewAction->setObjectName(QStringLiteral("cloneToOtherViewAction"));
+
+    encodingActionGroup = new QActionGroup(this);
+    encodingActionGroup->setExclusive(true);
+    auto addEncodingAction = [this](const QString &text, const QString &name,
+                                    DocumentFormat::TextEncoding encoding) {
+        QAction *item = encodingMenu->addAction(text);
+        item->setObjectName(name);
+        item->setCheckable(true);
+        encodingActionGroup->addAction(item);
+        connect(item, &QAction::triggered, this, [this, encoding] { setEncoding(encoding); });
+        return item;
+    };
+    encodingUtf8Action = addEncodingAction(tr("UTF-8"), QStringLiteral("encodingUtf8Action"),
+                                           DocumentFormat::TextEncoding::Utf8);
+    encodingUtf8BomAction = addEncodingAction(tr("UTF-8 BOM"), QStringLiteral("encodingUtf8BomAction"),
+                                              DocumentFormat::TextEncoding::Utf8Bom);
+    encodingUtf16LeAction = addEncodingAction(tr("UTF-16 LE"), QStringLiteral("encodingUtf16LeAction"),
+                                              DocumentFormat::TextEncoding::Utf16Le);
+    encodingUtf16BeAction = addEncodingAction(tr("UTF-16 BE"), QStringLiteral("encodingUtf16BeAction"),
+                                              DocumentFormat::TextEncoding::Utf16Be);
+    encodingWindows1252Action = addEncodingAction(tr("Windows-1252"), QStringLiteral("encodingWindows1252Action"),
+                                                  DocumentFormat::TextEncoding::Windows1252);
+
+    QMenu *eolMenu = editMenu->addMenu(tr("EOL Conversion"));
+    eolMenu->setObjectName(QStringLiteral("eolConversionMenu"));
+    eolActionGroup = new QActionGroup(this);
+    eolActionGroup->setExclusive(true);
+    auto addEolAction = [this, eolMenu](const QString &text, const QString &name,
+                                       DocumentFormat::EolKind eol) {
+        QAction *item = eolMenu->addAction(text);
+        item->setObjectName(name);
+        item->setCheckable(true);
+        eolActionGroup->addAction(item);
+        connect(item, &QAction::triggered, this, [this, eol] { convertEols(eol); });
+        return item;
+    };
+    eolCrLfAction = addEolAction(tr("Windows (CR LF)"), QStringLiteral("eolCrLfAction"),
+                                 DocumentFormat::EolKind::CrLf);
+    eolLfAction = addEolAction(tr("Unix (LF)"), QStringLiteral("eolLfAction"),
+                               DocumentFormat::EolKind::Lf);
+    eolCrAction = addEolAction(tr("Macintosh (CR)"), QStringLiteral("eolCrAction"),
+                               DocumentFormat::EolKind::Cr);
     syncVerticalAction->setObjectName(QStringLiteral("synchronizeVerticalScrollingAction"));
     syncHorizontalAction->setObjectName(QStringLiteral("synchronizeHorizontalScrollingAction"));
     syncVerticalAction->setText(tr("Synchronize Vertical Scrolling"));
@@ -1342,6 +1430,7 @@ void MainWindow::tabChanged(int index) {
     refreshPanels();
     updateMacroActions();
     updateDualViewActions();
+    updateFormatActions();
 
     // Update word wrap action state to match current tab
     DocumentTab* currentTab = getCurrentTab();
@@ -1414,34 +1503,20 @@ void MainWindow::updateStatusBar() {
     // Get total line count
     int lineCount = editor->send(SCI_GETLINECOUNT);
 
-    // Get E_EOL mode
-    int eolMode = editor->send(SCI_GETEOLMODE);
-    QString eolStr;
-    switch (eolMode) {
-        case 0: // SC_EOL_CRLF
-            eolStr = "Windows (CR LF)";
-            break;
-        case 1: // SC_EOL_LF
-            eolStr = "Unix (LF)";
-            break;
-        case 2: // SC_EOL_CR
-            eolStr = "Macintosh (CR)";
-            break;
-        default:
-            eolStr = "Unknown";
-    }
+    const QString eolStr = DocumentFormat::eolName(currentTab->eol());
 
     // Get insert/overwrite mode
     bool overwrite = editor->send(SCI_GETOVERTYPE);
     QString modeStr = overwrite ? "OVR" : "INS";
 
     // Format status bar text
-    QString statusText = QString("Ln %1, Col %2    Sel %3    Lines %4    %5    UTF-8    %6")
+    QString statusText = QString("Ln %1, Col %2    Sel %3    Lines %4    %5    %6    %7")
                          .arg(line + 1)
                          .arg(col + 1)
                          .arg(selLength)
                          .arg(lineCount)
                          .arg(eolStr)
+                         .arg(DocumentFormat::encodingName(currentTab->encoding()))
                          .arg(modeStr);
 
     if (!currentTab->recoveryWarning().isEmpty())
@@ -1498,6 +1573,7 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
     updateStatusBar();
     dualViewManager->updatePaneVisibility();
     updateDualViewActions();
+    updateFormatActions();
 }
 
 void MainWindow::wireDocumentView(DocumentTab *tab)
@@ -1668,20 +1744,28 @@ void MainWindow::updateEditActionsEnabled() {
     selectAllAction->setEnabled(hasEditor);
 }
 
-bool MainWindow::loadFile(const QString &filePath) {
+bool MainWindow::loadFile(const QString &filePath, QString *error) {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, "Error", "Could not open file for reading.");
+        if (error) *error = file.errorString();
+        else QMessageBox::warning(this, "Error", "Could not open file for reading.");
         return false;
     }
 
     const QByteArray content = file.readAll();
     file.close();
+    const DocumentFormat::DecodedDocument decoded = DocumentFormat::decode(content);
+    if (!decoded.success) {
+        if (error) *error = decoded.error;
+        else QMessageBox::warning(this, tr("Error"), decoded.error);
+        return false;
+    }
 
     DocumentTab* currentTab = getCurrentTab();
     if (currentTab) {
         currentTab->getEditor()->send(SCI_CLEARALL);
-        currentTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.constData()));
+        currentTab->getEditor()->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(decoded.utf8.constData()));
+        currentTab->setDocumentFormat(decoded.encoding, decoded.eol.kind, decoded.eol.insertion);
         currentTab->getEditor()->send(SCI_SETSAVEPOINT);
         currentTab->setFilePath(filePath);
         currentTab->setDirty(false);
@@ -1693,13 +1777,15 @@ bool MainWindow::loadFile(const QString &filePath) {
     return true;
 }
 
-bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab) {
+bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab, QString *errorOut) {
     if (!tab) return false;
 
     QString error;
-    if (!EditorUtils::writeToFile(tab->getEditor(), filePath, &error)) {
-        QMessageBox::warning(this, tr("Error"),
-                             tr("Could not save %1: %2").arg(filePath, error));
+    if (!DocumentFormat::saveAtomic(filePath, EditorUtils::text(tab->getEditor()),
+                                    tab->encoding(), &error)) {
+        if (errorOut) *errorOut = error;
+        else QMessageBox::warning(this, tr("Error"),
+                                  tr("Could not save %1: %2").arg(filePath, error));
         return false;
     }
     tab->markExplicitlySaved();
@@ -1727,6 +1813,59 @@ bool MainWindow::saveTab(DocumentTab *tab, bool forceSaveAs)
     tab->checkpoint();
     checkpointSessionLayout();
     refreshPanels();
+    return true;
+}
+
+bool MainWindow::openPath(const QString &path, QString *error)
+{
+    if (path.isEmpty()) {
+        if (error) *error = tr("No source path");
+        return false;
+    }
+    if (findTabIndexForFilePath(path) >= 0)
+        return true;
+    QTabWidget *target = dualViewManager->activePane();
+    const int previousCount = target->count();
+    createNewTab(path);
+    if (target->count() == previousCount) {
+        if (error) *error = tr("Could not open file");
+        return false;
+    }
+    return true;
+}
+
+bool MainWindow::saveCurrent(QString *error)
+{
+    DocumentTab *tab = getCurrentTab();
+    if (!tab || tab->getFilePath().isEmpty()) {
+        if (error) *error = tr("Current document has no destination path");
+        return false;
+    }
+    if (!saveFileToPath(tab->getFilePath(), tab, error))
+        return false;
+    tab->setRecoveryWarning({});
+    tab->setRecoveryCheckpointBlocked(false);
+    tab->checkpoint();
+    checkpointSessionLayout();
+    updateStatusBar();
+    return true;
+}
+
+bool MainWindow::saveCurrentAs(const QString &path, QString *error)
+{
+    DocumentTab *tab = getCurrentTab();
+    if (!tab || path.isEmpty()) {
+        if (error) *error = tr("No document or destination path");
+        return false;
+    }
+    if (!saveFileToPath(path, tab, error))
+        return false;
+    tab->setFilePath(path);
+    tab->setRecoveryWarning({});
+    tab->setRecoveryCheckpointBlocked(false);
+    tab->checkpoint();
+    checkpointSessionLayout();
+    updateStatusBar();
     return true;
 }
 
@@ -1801,10 +1940,33 @@ void MainWindow::loadSession() {
         if (!tab)
             continue;
         const RecoveryReadResult read = m_sessionManager->readRecoveryContent(document);
+        bool payloadUsable = read.success;
         if (read.success) {
-            tab->getEditor()->send(SCI_SETTEXT, 0,
-                                   reinterpret_cast<sptr_t>(read.content.constData()));
-            tab->getEditor()->send(SCI_SETSAVEPOINT);
+            QByteArray restored = read.content;
+            DocumentFormat::TextEncoding restoredEncoding = document.encoding;
+            DocumentFormat::EolKind restoredEol = document.eol;
+            DocumentFormat::EolKind restoredInsertionEol = document.insertionEol;
+            if (!document.dirty || document.legacyEncodedSnapshot) {
+                const auto decoded = DocumentFormat::decode(read.content);
+                if (decoded.success) {
+                    restored = decoded.utf8;
+                    if (!document.dirty) {
+                        restoredEncoding = decoded.encoding;
+                        restoredEol = decoded.eol.kind;
+                        restoredInsertionEol = decoded.eol.insertion;
+                    }
+                } else {
+                    payloadUsable = false;
+                }
+            }
+            if (!DocumentFormat::isValidUtf8Text(restored))
+                payloadUsable = false;
+            if (payloadUsable) {
+                tab->getEditor()->send(SCI_SETTEXT, 0,
+                                       reinterpret_cast<sptr_t>(restored.constData()));
+                tab->setDocumentFormat(restoredEncoding, restoredEol, restoredInsertionEol);
+                tab->getEditor()->send(SCI_SETSAVEPOINT);
+            }
         }
         tab->setRecoveredDirty(document.dirty);
         QString warning;
@@ -1824,11 +1986,15 @@ void MainWindow::loadSession() {
         case RecoveryState::Ready:
             break;
         }
+        if (!payloadUsable && warning.isEmpty())
+            warning = tr("Recovery content is not valid text; recovery data was preserved");
         tab->setRecoveryWarning(warning);
         tab->setRecoveryCheckpointBlocked(
-            !read.success || document.recoveryState == RecoveryState::SnapshotMissing ||
+            !payloadUsable || document.recoveryState == RecoveryState::SnapshotMissing ||
             document.recoveryState == RecoveryState::SnapshotUnreadable);
         tab->setSessionManager(m_sessionManager);
+        if (payloadUsable && !document.dirty)
+            tab->checkpoint();
     }
     m_loadingSession = false;
 
@@ -1843,6 +2009,7 @@ void MainWindow::loadSession() {
             if (restoredPrimary.contains(id)) {
                 auto *clone = new DocumentTab({}, 0, {}, this, original->sharedState());
                 clone->getEditor()->send(SCI_SETDOCPOINTER, 0, original->getEditor()->send(SCI_GETDOCPOINTER));
+                clone->setDocumentFormat(original->encoding(), original->eol(), original->insertionEol());
                 wireDocumentView(clone);
                 secondaryTabWidget->addTab(clone, tabWidget->tabText(tabWidget->indexOf(original)));
             } else {
@@ -2190,6 +2357,50 @@ void MainWindow::rebuildSavedMacroMenu()
     updateMacroActions();
 }
 
+void MainWindow::updateFormatActions()
+{
+    DocumentTab *tab = getCurrentTab();
+    const bool enabled = tab != nullptr;
+    for (QAction *item : encodingActionGroup->actions()) item->setEnabled(enabled);
+    for (QAction *item : eolActionGroup->actions()) item->setEnabled(enabled);
+    if (!tab) return;
+    encodingUtf8Action->setChecked(tab->encoding() == DocumentFormat::TextEncoding::Utf8);
+    encodingUtf8BomAction->setChecked(tab->encoding() == DocumentFormat::TextEncoding::Utf8Bom);
+    encodingUtf16LeAction->setChecked(tab->encoding() == DocumentFormat::TextEncoding::Utf16Le);
+    encodingUtf16BeAction->setChecked(tab->encoding() == DocumentFormat::TextEncoding::Utf16Be);
+    encodingWindows1252Action->setChecked(tab->encoding() == DocumentFormat::TextEncoding::Windows1252);
+    eolCrLfAction->setChecked(tab->insertionEol() == DocumentFormat::EolKind::CrLf);
+    eolLfAction->setChecked(tab->insertionEol() == DocumentFormat::EolKind::Lf);
+    eolCrAction->setChecked(tab->insertionEol() == DocumentFormat::EolKind::Cr);
+}
+
+void MainWindow::setEncoding(DocumentFormat::TextEncoding encoding)
+{
+    DocumentTab *tab = getCurrentTab();
+    if (!tab || tab->encoding() == encoding) return;
+    tab->setDocumentFormat(encoding, tab->eol(), tab->insertionEol());
+    tab->markMetadataDirty();
+    updateFormatActions();
+    updateStatusBar();
+}
+
+void MainWindow::convertEols(DocumentFormat::EolKind eol)
+{
+    DocumentTab *tab = getCurrentTab();
+    if (!tab) return;
+    const int mode = eol == DocumentFormat::EolKind::CrLf ? SC_EOL_CRLF :
+                     eol == DocumentFormat::EolKind::Cr ? SC_EOL_CR : SC_EOL_LF;
+    tab->getEditor()->send(SCI_CONVERTEOLS, mode);
+    for (DocumentTab *view : documentViews())
+        if (view->documentId() == tab->documentId())
+            view->getEditor()->send(SCI_SETEOLMODE, mode);
+    tab->refreshEolMetadata();
+    tab->setDocumentFormat(tab->encoding(), tab->eol(), eol);
+    tab->markMetadataDirty();
+    updateFormatActions();
+    updateStatusBar();
+}
+
 void MainWindow::syncVertical() {
     dualViewManager->setVerticalSync(syncVerticalAction->isChecked());
 }
@@ -2241,6 +2452,7 @@ void MainWindow::cloneToOtherView()
     }
     auto *clone = new DocumentTab({}, 0, {}, this, original->sharedState());
     clone->getEditor()->send(SCI_SETDOCPOINTER, 0, original->getEditor()->send(SCI_GETDOCPOINTER));
+    clone->setDocumentFormat(original->encoding(), original->eol(), original->insertionEol());
     wireDocumentView(clone);
     const int index = target->addTab(clone, source->tabText(source->currentIndex()));
     dualViewManager->activate(target, index);
@@ -2392,6 +2604,36 @@ void MainWindow::findReplaceClosed() {
 QMainWindow *createMainWindow(QWidget *parent)
 {
     return new MainWindow(parent);
+}
+
+bool openFileInMainWindow(QMainWindow *window, const QString &path, QString *error)
+{
+    auto *mainWindow = qobject_cast<MainWindow *>(window);
+    if (!mainWindow) {
+        if (error) *error = QStringLiteral("Invalid main window");
+        return false;
+    }
+    return mainWindow->openPath(path, error);
+}
+
+bool saveCurrentFileInMainWindow(QMainWindow *window, QString *error)
+{
+    auto *mainWindow = qobject_cast<MainWindow *>(window);
+    if (!mainWindow) {
+        if (error) *error = QStringLiteral("Invalid main window");
+        return false;
+    }
+    return mainWindow->saveCurrent(error);
+}
+
+bool saveCurrentFileAsInMainWindow(QMainWindow *window, const QString &path, QString *error)
+{
+    auto *mainWindow = qobject_cast<MainWindow *>(window);
+    if (!mainWindow) {
+        if (error) *error = QStringLiteral("Invalid main window");
+        return false;
+    }
+    return mainWindow->saveCurrentAs(path, error);
 }
 
 #include "mainwindow.moc"

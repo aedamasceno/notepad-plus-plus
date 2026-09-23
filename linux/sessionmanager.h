@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVector>
+#include "documentformat.h"
 
 class QJsonObject;
 
@@ -31,6 +32,10 @@ struct RecoveryDocument {
     qint64 originalMtimeMs = -1;
     QByteArray originalSha256;
     RecoveryState recoveryState = RecoveryState::Ready;
+    DocumentFormat::TextEncoding encoding = DocumentFormat::TextEncoding::Utf8;
+    DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
+    DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
+    bool legacyEncodedSnapshot = false;
 };
 
 struct DocumentCheckpoint {
@@ -38,6 +43,9 @@ struct DocumentCheckpoint {
     QString filePath;
     int untitledNumber = 0;
     bool dirty = false;
+    DocumentFormat::TextEncoding encoding = DocumentFormat::TextEncoding::Utf8;
+    DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
+    DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
 };
 
 struct RecoveryReadResult {
@@ -59,7 +67,7 @@ class SessionManager : public QObject
     Q_OBJECT
 
 public:
-    static constexpr int SchemaVersion = 3;
+    static constexpr int SchemaVersion = 4;
     static constexpr int DefaultCheckpointIntervalMs = 1000;
 
     explicit SessionManager(QObject *parent = nullptr,
@@ -101,6 +109,8 @@ private:
     QString relativeSnapshotPath(const QString &id) const;
     QString relativeSnapshotPath(const QString &id, const QByteArray &content) const;
     bool isManagedSnapshotPath(const QString &id, const QString &path) const;
+    bool contentAddressedSnapshotHash(const QString &id, const QString &path,
+                                      QByteArray *hash = nullptr) const;
     int indexOf(const QString &id) const;
     void captureOriginalMetadata(RecoveryDocument &document);
     void assessRecoveryState(RecoveryDocument &document);
@@ -109,6 +119,8 @@ private:
     CheckpointStatus writeCheckpoint();
     bool loadVersion2(const QJsonObject &root);
     bool loadVersion3(const QJsonObject &root);
+    bool loadVersion4(const QJsonObject &root);
+    bool canonicalizeLegacySnapshots(bool allowMissingSnapshots = false);
     bool importLegacyDirectory(const QString &directory);
 
     QTimer m_checkpointTimer;

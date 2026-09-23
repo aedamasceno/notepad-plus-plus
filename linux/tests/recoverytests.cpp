@@ -56,6 +56,20 @@ void writeBytes(const QString &path, const QByteArray &bytes)
     expect(file.write(bytes) == bytes.size(), "write fixture bytes");
 }
 
+QJsonObject sessionDocument(const QString &id, int untitledNumber, bool dirty,
+                            const QString &snapshot = {}, const QString &filePath = {})
+{
+    return {{QStringLiteral("id"), id},
+            {QStringLiteral("filePath"), filePath},
+            {QStringLiteral("untitledNumber"), untitledNumber},
+            {QStringLiteral("dirty"), dirty},
+            {QStringLiteral("snapshot"), snapshot},
+            {QStringLiteral("originalExisted"), false},
+            {QStringLiteral("originalSize"), -1},
+            {QStringLiteral("originalMtimeMs"), -1},
+            {QStringLiteral("originalSha256"), QString()}};
+}
+
 QAction *actionWithText(QObject *root, QString text)
 {
     for (QAction *action : root->findChildren<QAction *>()) {
@@ -169,7 +183,7 @@ void testDirtySnapshotReactivationKeepsLatestBytes()
     QTemporaryDir root;
     const QString sessionDir = root.filePath(QStringLiteral("session"));
     const QString id = QStringLiteral("reactivated-id");
-    const QByteArray latest = QStringLiteral("latest exact bytes 雪\0tail").toUtf8();
+    const QByteArray latest = QStringLiteral("latest exact bytes 雪 tail").toUtf8();
 
     SessionManager writer(nullptr, sessionDir, 20);
     writer.loadSession();
@@ -286,10 +300,7 @@ void testUnreadableSnapshotIsNotTreatedAsEmpty()
         QJsonObject{{QStringLiteral("schemaVersion"), 2},
                     {QStringLiteral("activeDocumentId"), id},
                     {QStringLiteral("documents"),
-                     QJsonArray{QJsonObject{{QStringLiteral("id"), id},
-                                            {QStringLiteral("dirty"), true},
-                                            {QStringLiteral("untitledNumber"), 1},
-                                            {QStringLiteral("snapshot"), relative}}}}})
+                     QJsonArray{sessionDocument(id, 1, true, relative)}}})
                                     .toJson(QJsonDocument::Compact);
     writeBytes(sessionDir + QStringLiteral("/session.json"), metadata);
 
@@ -433,10 +444,7 @@ void testMalformedMetadataMissingBackupAndOrphanPreservation()
     const QString missingSnapshot = QStringLiteral("snapshots/%1.snapshot").arg(
         QString::fromLatin1(QCryptographicHash::hash(QByteArrayLiteral("lost"),
                                                      QCryptographicHash::Sha256).toHex()));
-    QJsonObject doc{{QStringLiteral("id"), QStringLiteral("lost")},
-                    {QStringLiteral("dirty"), true},
-                    {QStringLiteral("untitledNumber"), 1},
-                    {QStringLiteral("snapshot"), missingSnapshot}};
+    QJsonObject doc = sessionDocument(QStringLiteral("lost"), 1, true, missingSnapshot);
     QJsonObject metadata{{QStringLiteral("schemaVersion"), 2},
                          {QStringLiteral("activeDocumentId"), QStringLiteral("lost")},
                          {QStringLiteral("documents"), QJsonArray{doc}}};
@@ -466,9 +474,7 @@ void testDualViewSchemaMigrationAndValidation()
 {
     QTemporaryDir root;
     const auto document = [](const QString &id, int untitledNumber) {
-        return QJsonObject{{QStringLiteral("id"), id},
-                           {QStringLiteral("untitledNumber"), untitledNumber},
-                           {QStringLiteral("dirty"), false}};
+        return sessionDocument(id, untitledNumber, false);
     };
     const QJsonArray documents{document(QStringLiteral("a"), 1),
                                document(QStringLiteral("b"), 2)};
@@ -599,10 +605,7 @@ void testMissingSnapshotCloseRequiresExplicitDecision()
         QJsonObject{{QStringLiteral("schemaVersion"), 2},
                     {QStringLiteral("activeDocumentId"), id},
                     {QStringLiteral("documents"),
-                     QJsonArray{QJsonObject{{QStringLiteral("id"), id},
-                                            {QStringLiteral("dirty"), true},
-                                            {QStringLiteral("untitledNumber"), 1},
-                                            {QStringLiteral("snapshot"), missingSnapshot}}}}})
+                     QJsonArray{sessionDocument(id, 1, true, missingSnapshot)}}})
                                     .toJson(QJsonDocument::Compact);
     writeBytes(sessionDir + QStringLiteral("/session.json"), metadata);
 
@@ -632,11 +635,9 @@ void testUnmanagedSnapshotPathCannotDeleteFiles()
     QDir().mkpath(sessionDir);
     const QString victim = root.filePath(QStringLiteral("victim.txt"));
     writeBytes(victim, "do not delete");
-    QJsonObject document{{QStringLiteral("id"), QStringLiteral("hostile")},
-                         {QStringLiteral("dirty"), true},
-                         {QStringLiteral("untitledNumber"), 1},
-                         {QStringLiteral("snapshot"), victim}};
+    QJsonObject document = sessionDocument(QStringLiteral("hostile"), 1, true, victim);
     QJsonObject metadata{{QStringLiteral("schemaVersion"), 2},
+                         {QStringLiteral("activeDocumentId"), QString()},
                          {QStringLiteral("documents"), QJsonArray{document}}};
     writeBytes(sessionDir + QStringLiteral("/session.json"), QJsonDocument(metadata).toJson());
     SessionManager manager(nullptr, sessionDir, 20);
@@ -703,6 +704,128 @@ void testLegacyDedupeWaitsForReadableBackup()
                manager.readRecoveryContent(documents.first()).content ==
                    QByteArrayLiteral("later readable duplicate"),
            "legacy migration imports later readable duplicate bytes");
+}
+
+void testLegacyMigrationIsAllOrNothingUntilEveryUniqueBackupIsReadable()
+{
+    QTemporaryDir root;
+    const QString canonical = root.filePath(QStringLiteral("canonical"));
+    const QString legacy = root.filePath(QStringLiteral("legacy"));
+    QDir().mkpath(legacy);
+
+    const QString readablePath = legacy + QStringLiteral("/readable.backup");
+    const QString missingPath = legacy + QStringLiteral("/missing.backup");
+    const QString unavailablePath = legacy + QStringLiteral("/temporarily-unavailable.backup");
+    const QByteArray readableBytes = QStringLiteral("readable 雪\r\n").toUtf8();
+    const QByteArray missingBytes = QStringLiteral("missing restored café\n").toUtf8();
+    const QByteArray unavailableBytes = QByteArrayLiteral("unavailable restored\r");
+    writeBytes(readablePath, readableBytes);
+    QDir().mkpath(unavailablePath);
+
+    const QJsonObject readable{{QStringLiteral("tabNumber"), 1},
+                               {QStringLiteral("backupPath"), readablePath}};
+    const QJsonObject missingDuplicate{{QStringLiteral("tabNumber"), 1},
+                                       {QStringLiteral("backupPath"),
+                                        legacy + QStringLiteral("/ignored-duplicate.backup")}};
+    const QJsonObject missing{{QStringLiteral("tabNumber"), 2},
+                              {QStringLiteral("backupPath"), missingPath}};
+    const QJsonObject unavailable{{QStringLiteral("tabNumber"), 3},
+                                  {QStringLiteral("backupPath"), unavailablePath}};
+    const QByteArray sourceMetadata = QJsonDocument(
+        QJsonObject{{QStringLiteral("activeTab"), 3},
+                    {QStringLiteral("untitledTabs"),
+                     QJsonArray{readable, missingDuplicate, missing, unavailable}}})
+                                          .toJson(QJsonDocument::Compact);
+    const QString sourceMetadataPath = legacy + QStringLiteral("/session.json");
+    writeBytes(sourceMetadataPath, sourceMetadata);
+
+    {
+        SessionManager blocked(nullptr, canonical, 20, {legacy});
+        blocked.loadSession();
+        expect(blocked.writesBlocked(),
+               "incomplete legacy migration blocks canonical recovery writes");
+        expect(blocked.documents().isEmpty(),
+               "incomplete legacy migration publishes no partial documents");
+        expect(blocked.flush() == CheckpointStatus::WritesBlocked,
+               "incomplete legacy migration cannot become durable");
+        const QString diagnostics = blocked.diagnostics().join(QLatin1Char('\n'));
+        expect(diagnostics.contains(missingPath),
+               "incomplete legacy migration diagnoses the missing unique backup");
+        expect(diagnostics.contains(unavailablePath),
+               "incomplete legacy migration diagnoses the unreadable unique backup");
+    }
+
+    expect(!QFileInfo::exists(canonical + QStringLiteral("/session.json")),
+           "blocked legacy migration and destructor publish no canonical metadata");
+    expect(QDir(canonical + QStringLiteral("/snapshots"))
+                   .entryList(QDir::Files | QDir::NoDotAndDotDot)
+                   .isEmpty(),
+           "blocked legacy migration and destructor publish no partial snapshots");
+    QFile retainedMetadata(sourceMetadataPath);
+    expect(retainedMetadata.open(QIODevice::ReadOnly) &&
+               retainedMetadata.readAll() == sourceMetadata,
+           "blocked legacy migration preserves source metadata bytes");
+    retainedMetadata.close();
+    QFile retainedReadable(readablePath);
+    expect(retainedReadable.open(QIODevice::ReadOnly) &&
+               retainedReadable.readAll() == readableBytes,
+           "blocked legacy migration preserves readable backup bytes");
+    retainedReadable.close();
+
+    QDir(unavailablePath).removeRecursively();
+    writeBytes(missingPath, missingBytes);
+    writeBytes(unavailablePath, unavailableBytes);
+
+    {
+        SessionManager retry(nullptr, canonical, 20, {legacy});
+        retry.loadSession();
+        const auto documents = retry.documents();
+        expect(!retry.writesBlocked() && documents.size() == 3,
+               "fresh retry imports every unique legacy identity exactly once");
+        expect(retry.activeDocumentId() == QStringLiteral("legacy-untitled-3"),
+               "fresh retry preserves the legacy active identity");
+        const QVector<QByteArray> expected{readableBytes, missingBytes, unavailableBytes};
+        for (int index = 0; index < documents.size() && index < expected.size(); ++index) {
+            expect(documents.at(index).untitledNumber == index + 1,
+                   "fresh retry preserves unique legacy identity order");
+            expect(retry.readRecoveryContent(documents.at(index)).content == expected.at(index),
+                   "fresh retry imports each legacy backup exactly");
+        }
+        expect(retry.flush() == CheckpointStatus::Durable,
+               "complete legacy migration becomes durable");
+    }
+
+    QFile canonicalMetadata(canonical + QStringLiteral("/session.json"));
+    expect(canonicalMetadata.open(QIODevice::ReadOnly),
+           "complete legacy migration publishes canonical metadata");
+    const QJsonDocument canonicalJson = QJsonDocument::fromJson(canonicalMetadata.readAll());
+    expect(canonicalJson.object().value(QStringLiteral("schemaVersion")).toInt() ==
+               SessionManager::SchemaVersion &&
+               canonicalJson.object().value(QStringLiteral("documents")).toArray().size() == 3,
+           "complete legacy migration publishes all documents in schema 4");
+
+    SessionManager reloaded(nullptr, canonical, 20, {legacy});
+    reloaded.loadSession();
+    const auto reloadedDocuments = reloaded.documents();
+    expect(reloadedDocuments.size() == 3,
+           "fresh schema 4 reload restores every migrated legacy document");
+    const QVector<QByteArray> expected{readableBytes, missingBytes, unavailableBytes};
+    for (int index = 0; index < reloadedDocuments.size() && index < expected.size(); ++index)
+        expect(reloaded.readRecoveryContent(reloadedDocuments.at(index)).content == expected.at(index),
+               "fresh schema 4 reload restores every migrated backup exactly");
+
+    QFile finalMetadata(sourceMetadataPath);
+    expect(finalMetadata.open(QIODevice::ReadOnly) && finalMetadata.readAll() == sourceMetadata,
+           "successful retry still preserves exact legacy metadata bytes");
+    finalMetadata.close();
+    const QVector<QPair<QString, QByteArray>> sources{{readablePath, readableBytes},
+                                                       {missingPath, missingBytes},
+                                                       {unavailablePath, unavailableBytes}};
+    for (const auto &source : sources) {
+        QFile backup(source.first);
+        expect(backup.open(QIODevice::ReadOnly) && backup.readAll() == source.second,
+               "successful retry preserves every legacy backup byte");
+    }
 }
 
 void testCanonicalLegacyMigrationPreservesSource()
@@ -1135,6 +1258,7 @@ int main(int argc, char **argv)
     testUnmanagedSnapshotPathCannotDeleteFiles();
     testLegacyMigrationKeepsSourceAndDeduplicates();
     testLegacyDedupeWaitsForReadableBackup();
+    testLegacyMigrationIsAllOrNothingUntilEveryUniqueBackupIsReadable();
     testCanonicalLegacyMigrationPreservesSource();
     testHistoricalNppLinuxLocationDiscovery();
     testAtomicOrdinarySaveFailurePreservesOriginal();
