@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QIcon>
 #include <QMainWindow>
 
 int main(int argc, char *argv[])
@@ -12,6 +13,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("TextPinnacle"));
     QCoreApplication::setApplicationName(QStringLiteral("TextPinnacle"));
     QApplication::setApplicationDisplayName(QStringLiteral("TextPinnacle"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
     if (!migrateLegacyQSettings())
         qWarning() << "Could not migrate legacy application settings";
 

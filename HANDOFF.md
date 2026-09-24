@@ -2,7 +2,7 @@
 
 ## Repository state
 
-- Branch: `linux-port-recovery`
+- Canonical development branch: `linux-port`
 - Batch starting HEAD: `646b4031d4ccdf4b608a8a2b1383bc11baaa6a49`
 - Snapshot reactivation cleanup: `832d8b1f0a444fa722710187d0670a2c6d374dfe`
 - Checkpoint status and failure-safe shutdown: `aaea384671f107dcc2b21e1daf0949476b436db5`

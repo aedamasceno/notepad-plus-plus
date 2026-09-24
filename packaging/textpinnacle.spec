@@ -41,6 +41,7 @@ appstream-util validate-relax --nonet \
 %doc README.md LINUX-PORT.md
 %{_bindir}/textpinnacle
 %{_datadir}/applications/textpinnacle.desktop
+%{_datadir}/icons/hicolor/256x256/apps/textpinnacle.png
 %{_metainfodir}/io.github.aedamasceno.textpinnacle.metainfo.xml
 
 %changelog

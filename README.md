@@ -18,27 +18,24 @@ The published alpha includes an RPM built and tested on **Fedora 44 x86_64**. Re
 
 This is an independent porting effort based on the open-source Notepad++ project. Notepad++ itself and the original source code are the work of the Notepad++ project and its contributors.
 
+## Screenshot
+
+![TextPinnacle](docs/images/textpinnacle-linux.png)
+
 ## Why This Project Exists
 
 I am a longtime Notepad++ user who moved to Linux full time. I wanted the familiar Notepad++ workflow without running the Windows application through Wine, so I started porting the existing project to a native Linux application.
 
 The goal is not to create a different editor inspired by Notepad++. The goal is to bring as much of the actual Notepad++ experience as practical to Linux while keeping the port maintainable against upstream development.
 
-## Latest Development — September 17, 2026
+## Current Development
 
-New work is available on the
-[linux-port-recovery branch](https://github.com/aedamasceno/textpinnacle/tree/linux-port-recovery):
-
-- Live Function List, File Browser, Document List, and Document Map panels.
-- Session and crash recovery for unsaved and modified documents.
-- Safer saving, recovery checkpoints, and shutdown failure handling.
-- Automated regression tests for panel behavior and document persistence.
-
-These changes are pending final review and integration into the main
-development branch. They are not included in the published alpha download.
-
-Printing, macro recording/playback, dual views, and synchronized scrolling
-remain unfinished.
+The canonical development branch is
+[`linux-port`](https://github.com/aedamasceno/textpinnacle/tree/linux-port).
+It includes native search and replace, encoding and EOL handling, printing,
+macro recording and playback, dual editor views, synchronized scrolling,
+dockable document tools, and durable session recovery. Published alpha
+packages may not yet contain all development-branch functionality.
 
 ## Project Status
 
@@ -57,16 +54,19 @@ remain unfinished.
 | Show All Characters | ✅ Working |
 | Indent Guides | ✅ Working |
 | Notepad++ toolbar icons | ✅ Working |
-| Find / Replace | 🟡 Working, still being expanded |
-| Unsaved document/session recovery | 🟡 Implemented, still being validated |
+| Find / Replace | 🟡 Working; replace-in-files is not implemented |
+| Encoding / EOL handling | ✅ Working for the supported formats |
+| Unsaved document/session recovery | ✅ Working with legacy migration |
 | Lexilla syntax highlighting | 🟡 Basic integration working; language coverage in progress |
-| Function List | 🟡 In progress |
-| File Browser | 🟡 In progress |
-| Document List | 🟡 In progress |
-| Printing | 🟡 In progress |
-| Document Map | 🔴 Not complete |
-| Macro recording/playback | 🔴 Not complete |
-| Synchronized scrolling | 🔴 Not complete |
+| Function List | 🟡 Working for a limited language set |
+| File Browser | 🟡 Core browsing and file opening work |
+| Document List | 🟡 Core listing and activation work |
+| Printing | ✅ Working |
+| Document Map | 🟡 Working simplified overview |
+| Macro recording/playback | ✅ Working |
+| Dual editor views | ✅ Working |
+| Synchronized scrolling | ✅ Working |
+| Preferences UI | 🔴 Not available |
 | Plugin compatibility | 🔴 Not available |
 
 The table above reflects the current development state and will change frequently as the Linux port progresses.
@@ -103,15 +103,12 @@ Linux-specific implementation is kept under `linux/` where practical so that fut
 
 Work is currently focused on:
 
-- completing dockable panels such as Function List, File Browser, Document List, and Document Map
-- expanding search and replace functionality
-- completing printing support
-- macro recording and playback
-- language/lexer integration
-- encoding and EOL handling
-- session persistence and recovery
-- tab/document workflow
-- Linux packaging and desktop integration
+- protecting normal saves from external file changes
+- opening command-line and desktop-launcher file arguments
+- release-gating Linux packaging and CI
+- expanding language/lexer integration and Function List coverage
+- adding a preferences interface
+- expanding search, panel, and session-state functionality
 - keeping the port synchronized with upstream Notepad++ changes
 
 ## Contributing
