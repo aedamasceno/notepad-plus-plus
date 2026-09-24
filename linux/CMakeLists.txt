@@ -84,7 +84,7 @@ target_compile_options(textpinnacle_support PRIVATE -include cstdint)
 target_link_libraries(textpinnacle_support PUBLIC Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport Qt6::Concurrent)
 target_compile_features(textpinnacle_support PUBLIC cxx_std_17)
 
-add_library(textpinnacle_app STATIC mainwindow.cpp)
+add_library(textpinnacle_app STATIC mainwindow.cpp startupfiles.cpp)
 target_link_libraries(textpinnacle_app PUBLIC textpinnacle_support)
 
 add_executable(textpinnacle main.cpp resources.qrc)
@@ -129,6 +129,19 @@ if(BUILD_TESTING)
     add_executable(linux_settings_migration_tests tests/settingsmigrationtests.cpp)
     target_link_libraries(linux_settings_migration_tests PRIVATE textpinnacle_support)
     add_test(NAME linux_settings_migration_tests COMMAND linux_settings_migration_tests)
+
+    add_executable(linux_external_save_tests tests/externalsavetests.cpp)
+    target_link_libraries(linux_external_save_tests PRIVATE textpinnacle_app)
+    add_test(NAME linux_external_save_tests COMMAND linux_external_save_tests)
+    set_tests_properties(linux_external_save_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(linux_startup_argument_tests tests/startupargumenttests.cpp)
+    target_link_libraries(linux_startup_argument_tests PRIVATE textpinnacle_app)
+    add_test(NAME linux_startup_argument_tests COMMAND linux_startup_argument_tests)
+    set_tests_properties(linux_startup_argument_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_test(NAME linux_release_gating_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/releasegatingtest.py")
 endif()
 
 include(GNUInstallDirs)

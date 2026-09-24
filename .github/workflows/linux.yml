@@ -1,0 +1,56 @@
+name: Linux
+
+on:
+  push:
+    paths:
+      - CMakeLists.txt
+      - linux/**
+      - packaging/**
+      - scintilla/**
+      - lexilla/**
+      - .github/workflows/linux.yml
+  pull_request:
+    paths:
+      - CMakeLists.txt
+      - linux/**
+      - packaging/**
+      - scintilla/**
+      - lexilla/**
+      - .github/workflows/linux.yml
+
+jobs:
+  debug-build-test-install:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build and validation tools
+        run: >-
+          dnf install -y git gcc-c++ cmake ninja-build python3
+          qt6-qtbase-devel qt6-qt5compat-devel
+          desktop-file-utils libappstream-glib
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Configure Debug with tests
+        run: cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build-linux --parallel 2
+      - name: Run complete CTest suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build-linux --output-on-failure
+      - name: Verify application artifact
+        run: test -x build-linux/linux/textpinnacle
+      - name: Stage install
+        env:
+          DESTDIR: ${{ github.workspace }}/stage
+        run: cmake --install build-linux --prefix /usr --strip --config Debug
+      - name: Verify staged release files
+        run: |
+          test -x stage/usr/bin/textpinnacle
+          test -f stage/usr/share/applications/textpinnacle.desktop
+          test -f stage/usr/share/icons/hicolor/256x256/apps/textpinnacle.png
+          test -f stage/usr/share/metainfo/io.github.aedamasceno.textpinnacle.metainfo.xml
+      - name: Validate desktop and AppStream metadata
+        run: |
+          desktop-file-validate stage/usr/share/applications/textpinnacle.desktop
+          appstream-util validate-relax --nonet stage/usr/share/metainfo/io.github.aedamasceno.textpinnacle.metainfo.xml

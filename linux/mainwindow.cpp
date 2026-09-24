@@ -1,4 +1,5 @@
 #include <QApplication>
+#include "mainwindow.h"
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QMenu>
@@ -6,6 +7,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QAbstractButton>
+#include <QPushButton>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QInputDialog>
@@ -37,6 +39,8 @@
 #include <QSet>
 #include <QDir>
 #include <QByteArray>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QUuid>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
@@ -57,6 +61,34 @@
 #include "Lexilla.h"
 #include "SciLexer.h"
 
+struct DiskBaseline {
+    bool initialized = false;
+    bool existed = false;
+    qint64 size = -1;
+    qint64 mtimeMs = -1;
+    QByteArray sha256;
+};
+
+static DiskBaseline baselineForBytes(const QString &path, const QByteArray &bytes)
+{
+    const QFileInfo info(path);
+    return {true, true, bytes.size(), info.lastModified().toMSecsSinceEpoch(),
+            QCryptographicHash::hash(bytes, QCryptographicHash::Sha256)};
+}
+
+static DiskBaseline readDiskBaseline(const QString &path, QString *error = nullptr)
+{
+    const QFileInfo info(path);
+    if (!info.exists())
+        return {true, false, -1, -1, {}};
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) *error = file.errorString();
+        return {};
+    }
+    return baselineForBytes(path, file.readAll());
+}
+
 struct LogicalDocumentState {
     QString filePath;
     bool modified = false;
@@ -69,6 +101,7 @@ struct LogicalDocumentState {
     DocumentFormat::TextEncoding encoding = DocumentFormat::TextEncoding::Utf8;
     DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
     DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
+    DiskBaseline diskBaseline;
 };
 
 struct FileSearchProgressState {
@@ -125,6 +158,8 @@ public:
     void setRecoveryCheckpointBlocked(bool blocked) { m_state->recoveryCheckpointBlocked = blocked; }
     void setSessionManager(SessionManager* sessionManager) { m_state->sessionManager = sessionManager; }
     QSharedPointer<LogicalDocumentState> sharedState() const { return m_state; }
+    DiskBaseline diskBaseline() const { return m_state->diskBaseline; }
+    void setDiskBaseline(const DiskBaseline &baseline) { m_state->diskBaseline = baseline; }
     DocumentFormat::TextEncoding encoding() const { return m_state->encoding; }
     DocumentFormat::EolKind eol() const { return m_state->eol; }
     DocumentFormat::EolKind insertionEol() const { return m_state->insertionEol; }
@@ -611,6 +646,9 @@ public:
     bool openPath(const QString &path, QString *error = nullptr);
     bool saveCurrent(QString *error = nullptr);
     bool saveCurrentAs(const QString &path, QString *error = nullptr);
+    void setExternalSaveDecisionProvider(ExternalSaveDecisionProvider provider) {
+        m_externalSaveDecisionProvider = std::move(provider);
+    }
     void startFileSearch(FileSearchRequest request);
 
 protected:
@@ -678,7 +716,12 @@ private:
     void setupActions();
     void updateWindowTitle();
     bool loadFile(const QString &filePath, QString *error = nullptr);
+    bool reloadFile(DocumentTab *tab, QString *error = nullptr);
     bool saveFileToPath(const QString &filePath, DocumentTab *tab, QString *error = nullptr);
+    enum class SavePreparation { Proceed, Completed, Cancelled };
+    SavePreparation prepareOrdinarySave(DocumentTab *tab, QString *error = nullptr);
+    SavePreparation prepareSaveAs(DocumentTab *tab, const QString &destination,
+                                  QString *error = nullptr);
     bool saveTab(DocumentTab *tab, bool forceSaveAs = false);
     void createNewTab(const QString& filePath = "", const QString &documentId = QString(),
                       int restoredUntitledNumber = 0, bool registerWithSession = true);
@@ -712,6 +755,8 @@ private:
     // Session management
     CheckpointStatus saveSession();
     void loadSession();
+
+    ExternalSaveDecisionProvider m_externalSaveDecisionProvider;
 
     QTabWidget* tabWidget;
     QTabWidget* secondaryTabWidget;
@@ -1861,13 +1906,163 @@ bool MainWindow::loadFile(const QString &filePath, QString *error) {
         currentTab->setDocumentFormat(decoded.encoding, decoded.eol.kind, decoded.eol.insertion);
         currentTab->getEditor()->send(SCI_SETSAVEPOINT);
         currentTab->setFilePath(filePath);
+        currentTab->setDiskBaseline(baselineForBytes(filePath, content));
         currentTab->setDirty(false);
+        currentTab->checkpoint();
+        checkpointSessionLayout();
     }
 
     // Update status bar after loading file
     updateStatusBar();
 
     return true;
+}
+
+bool MainWindow::reloadFile(DocumentTab *tab, QString *error)
+{
+    if (!tab || tab->getFilePath().isEmpty())
+        return false;
+    QFile file(tab->getFilePath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) *error = file.errorString();
+        return false;
+    }
+    const QByteArray content = file.readAll();
+    const auto decoded = DocumentFormat::decode(content);
+    if (!decoded.success) {
+        if (error) *error = decoded.error;
+        return false;
+    }
+    tab->getEditor()->send(SCI_SETTEXT, 0,
+                           reinterpret_cast<sptr_t>(decoded.utf8.constData()));
+    tab->setDocumentFormat(decoded.encoding, decoded.eol.kind, decoded.eol.insertion);
+    tab->markExplicitlySaved();
+    tab->getEditor()->send(SCI_SETSAVEPOINT);
+    tab->setDirty(false);
+    tab->setDiskBaseline(baselineForBytes(tab->getFilePath(), content));
+    tab->setRecoveryWarning({});
+    tab->setRecoveryCheckpointBlocked(false);
+    tab->checkpoint();
+    checkpointSessionLayout();
+    updateStatusBar();
+    refreshPanels();
+    return true;
+}
+
+MainWindow::SavePreparation MainWindow::prepareOrdinarySave(DocumentTab *tab, QString *error)
+{
+    QString baselineError;
+    const DiskBaseline current = readDiskBaseline(tab->getFilePath(), &baselineError);
+    if (!current.initialized) {
+        if (error) *error = baselineError;
+        return SavePreparation::Cancelled;
+    }
+    const DiskBaseline expected = tab->diskBaseline();
+    const bool changed = !expected.initialized || expected.existed != current.existed ||
+        (current.existed && (expected.size != current.size ||
+                             expected.mtimeMs != current.mtimeMs ||
+                             expected.sha256 != current.sha256));
+    if (!changed)
+        return SavePreparation::Proceed;
+
+    const ExternalSaveConflict conflict = current.existed
+        ? ExternalSaveConflict::Modified : ExternalSaveConflict::Deleted;
+    ExternalSaveDecision decision = ExternalSaveDecision::Cancel;
+    if (m_externalSaveDecisionProvider) {
+        decision = m_externalSaveDecisionProvider(conflict, tab->isDirty());
+    } else if (!error) {
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(tr("File Changed on Disk"));
+        QAbstractButton *affirmative = nullptr;
+        QAbstractButton *saveAs = nullptr;
+        if (conflict == ExternalSaveConflict::Modified) {
+            box.setText(tr("%1 was modified outside TextPinnacle.").arg(tab->getFilePath()));
+            box.setInformativeText(tab->isDirty()
+                ? tr("Reload discards your unsaved changes. Choose Overwrite only to replace the external version.")
+                : tr("Reload the external version or explicitly overwrite it?"));
+            affirmative = box.addButton(tr("Overwrite"), QMessageBox::DestructiveRole);
+            saveAs = box.addButton(tr("Reload"), QMessageBox::AcceptRole);
+        } else {
+            box.setText(tr("%1 was deleted outside TextPinnacle.").arg(tab->getFilePath()));
+            box.setInformativeText(tr("Recreate it, save your buffer under another name, or cancel?"));
+            affirmative = box.addButton(tr("Recreate"), QMessageBox::DestructiveRole);
+            saveAs = box.addButton(tr("Save As…"), QMessageBox::AcceptRole);
+        }
+        auto *cancelButton = box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(cancelButton);
+        box.setEscapeButton(cancelButton);
+        box.exec();
+        if (box.clickedButton() == affirmative)
+            decision = conflict == ExternalSaveConflict::Modified
+                ? ExternalSaveDecision::Overwrite : ExternalSaveDecision::Recreate;
+        else if (box.clickedButton() == saveAs)
+            decision = conflict == ExternalSaveConflict::Modified
+                ? ExternalSaveDecision::Reload : ExternalSaveDecision::SaveAs;
+    }
+
+    if (decision == ExternalSaveDecision::Overwrite && conflict == ExternalSaveConflict::Modified)
+        return SavePreparation::Proceed;
+    if (decision == ExternalSaveDecision::Recreate && conflict == ExternalSaveConflict::Deleted)
+        return SavePreparation::Proceed;
+    if (decision == ExternalSaveDecision::Reload && conflict == ExternalSaveConflict::Modified) {
+        if (!reloadFile(tab, error) && error && error->isEmpty())
+            *error = tr("Could not reload the externally modified file");
+        return SavePreparation::Cancelled;
+    }
+    if (decision == ExternalSaveDecision::SaveAs) {
+        const QString destination = QFileDialog::getSaveFileName(
+            this, tr("Save File"), tab->getFilePath(), tr("All Files (*)"));
+        if (!destination.isEmpty() && saveFileToPath(destination, tab, error)) {
+            tab->setFilePath(destination);
+            tab->setRecoveryWarning({});
+            tab->setRecoveryCheckpointBlocked(false);
+            tab->checkpoint();
+            checkpointSessionLayout();
+            return SavePreparation::Completed;
+        }
+    }
+    if (error && error->isEmpty())
+        *error = conflict == ExternalSaveConflict::Deleted
+            ? tr("Save cancelled because the destination was deleted externally")
+            : tr("Save cancelled because the destination changed externally");
+    return SavePreparation::Cancelled;
+}
+
+MainWindow::SavePreparation MainWindow::prepareSaveAs(DocumentTab *tab,
+                                                       const QString &destination,
+                                                       QString *error)
+{
+    const QString target = QFileInfo(destination).absoluteFilePath();
+    const QString current = QFileInfo(tab->getFilePath()).absoluteFilePath();
+    if (!tab->getFilePath().isEmpty() && target == current)
+        return prepareOrdinarySave(tab, error);
+    if (!QFileInfo::exists(target))
+        return SavePreparation::Proceed;
+
+    ExternalSaveDecision decision = ExternalSaveDecision::Cancel;
+    if (m_externalSaveDecisionProvider) {
+        decision = m_externalSaveDecisionProvider(
+            ExternalSaveConflict::ExistingSaveAsTarget, tab->isDirty());
+    } else if (!error) {
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(tr("Replace Existing File"));
+        box.setText(tr("%1 already exists.").arg(target));
+        box.setInformativeText(tr("Overwrite the existing file with the current editor buffer?"));
+        auto *overwrite = box.addButton(tr("Overwrite"), QMessageBox::DestructiveRole);
+        auto *cancel = box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(cancel);
+        box.setEscapeButton(cancel);
+        box.exec();
+        if (box.clickedButton() == overwrite)
+            decision = ExternalSaveDecision::Overwrite;
+    }
+    if (decision == ExternalSaveDecision::Overwrite)
+        return SavePreparation::Proceed;
+    if (error && error->isEmpty())
+        *error = tr("Save As cancelled because the destination already exists");
+    return SavePreparation::Cancelled;
 }
 
 bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab, QString *errorOut) {
@@ -1884,6 +2079,7 @@ bool MainWindow::saveFileToPath(const QString &filePath, DocumentTab* tab, QStri
     tab->markExplicitlySaved();
     tab->getEditor()->send(SCI_SETSAVEPOINT);
     tab->setDirty(false);
+    tab->setDiskBaseline(readDiskBaseline(filePath));
     return true;
 }
 
@@ -1896,6 +2092,19 @@ bool MainWindow::saveTab(DocumentTab *tab, bool forceSaveAs)
         destination = QFileDialog::getSaveFileName(
             this, tr("Save File"), destination, tr("All Files (*)"));
         if (destination.isEmpty())
+            return false;
+    }
+    if (forceSaveAs || tab->getFilePath().isEmpty()) {
+        const SavePreparation preparation = prepareSaveAs(tab, destination);
+        if (preparation == SavePreparation::Completed)
+            return true;
+        if (preparation == SavePreparation::Cancelled)
+            return false;
+    } else {
+        const SavePreparation preparation = prepareOrdinarySave(tab);
+        if (preparation == SavePreparation::Completed)
+            return true;
+        if (preparation == SavePreparation::Cancelled)
             return false;
     }
     if (!saveFileToPath(destination, tab))
@@ -1915,11 +2124,19 @@ bool MainWindow::openPath(const QString &path, QString *error)
         if (error) *error = tr("No source path");
         return false;
     }
-    if (findTabIndexForFilePath(path) >= 0)
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    const QFileInfo info(absolutePath);
+    if (!info.exists() || !info.isFile() || !info.isReadable()) {
+        if (error) *error = tr("Could not open %1").arg(absolutePath);
+        return false;
+    }
+    if (findTabIndexForFilePath(absolutePath) >= 0)
         return true;
+    if (DocumentTab *current = getCurrentTab(); current && current->isDisposablePlaceholder())
+        return loadFile(absolutePath, error);
     QTabWidget *target = dualViewManager->activePane();
     const int previousCount = target->count();
-    createNewTab(path);
+    createNewTab(absolutePath);
     if (target->count() == previousCount) {
         if (error) *error = tr("Could not open file");
         return false;
@@ -1934,6 +2151,11 @@ bool MainWindow::saveCurrent(QString *error)
         if (error) *error = tr("Current document has no destination path");
         return false;
     }
+    const SavePreparation preparation = prepareOrdinarySave(tab, error);
+    if (preparation == SavePreparation::Completed)
+        return true;
+    if (preparation == SavePreparation::Cancelled)
+        return false;
     if (!saveFileToPath(tab->getFilePath(), tab, error))
         return false;
     tab->setRecoveryWarning({});
@@ -1951,6 +2173,11 @@ bool MainWindow::saveCurrentAs(const QString &path, QString *error)
         if (error) *error = tr("No document or destination path");
         return false;
     }
+    const SavePreparation preparation = prepareSaveAs(tab, path, error);
+    if (preparation == SavePreparation::Completed)
+        return true;
+    if (preparation == SavePreparation::Cancelled)
+        return false;
     if (!saveFileToPath(path, tab, error))
         return false;
     tab->setFilePath(path);
@@ -2062,6 +2289,12 @@ void MainWindow::loadSession() {
             }
         }
         tab->setRecoveredDirty(document.dirty);
+        if (!document.filePath.isEmpty() && !document.dirty && read.success) {
+            tab->setDiskBaseline(readDiskBaseline(document.filePath));
+        } else if (!document.filePath.isEmpty()) {
+            tab->setDiskBaseline({true, document.originalExisted, document.originalSize,
+                                  document.originalMtimeMs, document.originalSha256});
+        }
         QString warning;
         switch (document.recoveryState) {
         case RecoveryState::OriginalMissing:
@@ -2745,6 +2978,13 @@ bool saveCurrentFileAsInMainWindow(QMainWindow *window, const QString &path, QSt
         return false;
     }
     return mainWindow->saveCurrentAs(path, error);
+}
+
+void setExternalSaveDecisionProvider(QMainWindow *window,
+                                     ExternalSaveDecisionProvider provider)
+{
+    if (auto *mainWindow = qobject_cast<MainWindow *>(window))
+        mainWindow->setExternalSaveDecisionProvider(std::move(provider));
 }
 
 void startFileSearchInMainWindow(QMainWindow *window, const FileSearchRequest &request)

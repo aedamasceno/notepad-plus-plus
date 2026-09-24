@@ -25,13 +25,14 @@ It is not yet feature-complete and should not be considered production-ready.
 %autosetup
 
 %build
-%cmake -G Ninja
+%cmake -G Ninja -DBUILD_TESTING:BOOL=ON
 %cmake_build
 
 %install
 %cmake_install
 
 %check
+%ctest --output-on-failure
 desktop-file-validate %{buildroot}%{_datadir}/applications/textpinnacle.desktop
 appstream-util validate-relax --nonet \
     %{buildroot}%{_metainfodir}/io.github.aedamasceno.textpinnacle.metainfo.xml
