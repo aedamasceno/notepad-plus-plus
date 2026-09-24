@@ -1,10 +1,12 @@
-# 🐧 Notepad++ Native Linux Port
+# TextPinnacle
 
-An unofficial native Linux port of **Notepad++** using **Qt 6**, **Scintilla**, and **Lexilla**.
+**TextPinnacle** is an independent native Linux text and source-code editor created and maintained by **Emanuel Damasceno**. It is derived from the open-source **Notepad++** codebase and uses **Qt 6**, **Scintilla**, and **Lexilla**.
 
 **No Wine required.**
 
-[Download the alpha](https://github.com/aedamasceno/notepad-plus-plus/releases) · [Report a Linux bug](https://github.com/aedamasceno/notepad-plus-plus/issues/new/choose) · [Help with the Linux port](CONTRIBUTING-LINUX.md)
+> **Independent project:** TextPinnacle is not an official Notepad++ release and is not affiliated with or endorsed by the Notepad++ project.
+
+[Download the alpha](https://github.com/aedamasceno/textpinnacle/releases) · [Report a Linux bug](https://github.com/aedamasceno/textpinnacle/issues/new/choose) · [Help with the Linux port](CONTRIBUTING-LINUX.md)
 
 The published alpha includes an RPM built and tested on **Fedora 44 x86_64**. Read its release notes for installation instructions and limitations. Published packages may lag behind the development branch.
 
@@ -12,22 +14,22 @@ The published alpha includes an RPM built and tested on **Fedora 44 x86_64**. Re
 >
 > The application runs natively on Linux and core editing functionality is operational. Full Notepad++ feature parity is still in progress.
 
-This is an independent porting effort based on the open-source Notepad++ project. Notepad++ itself and the original source code are the work of the Notepad++ project and its contributors.
+TextPinnacle builds on the open-source Notepad++ codebase while maintaining its own Linux-specific development, branding, releases, and project direction. Notepad++ and its original source code remain the work of the Notepad++ project and its contributors.
 
 ## Screenshot
 
-![Notepad++ Native Linux Port](docs/images/notepad-plus-plus-linux.png)
+![TextPinnacle](docs/images/notepad-plus-plus-linux.png)
 
 ## Why This Project Exists
 
 I am a longtime Notepad++ user who moved to Linux full time. I wanted the familiar Notepad++ workflow without running the Windows application through Wine, so I started porting the existing project to a native Linux application.
 
-The goal is not to create a different editor inspired by Notepad++. The goal is to bring as much of the actual Notepad++ experience as practical to Linux while keeping the port maintainable against upstream development.
+TextPinnacle's goal is to bring the editing workflow and capabilities I value from Notepad++ to a native Linux application while keeping the project maintainable against upstream development.
 
 ## Latest Development — September 17, 2026
 
 New work is available on the
-[linux-port-recovery branch](https://github.com/aedamasceno/notepad-plus-plus/tree/linux-port-recovery):
+[linux-port-recovery branch](https://github.com/aedamasceno/textpinnacle/tree/linux-port-recovery):
 
 - Live Function List, File Browser, Document List, and Document Map panels.
 - Session and crash recovery for unsaved and modified documents.
