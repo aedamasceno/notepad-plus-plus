@@ -54,6 +54,9 @@
 #include "dualviewmanager.h"
 #include "documentformat.h"
 #include "searchmanager.h"
+#include "editorpreferences.h"
+#include "preferencesdialog.h"
+#include "languagecatalog.h"
 
 // Include Scintilla ILexer header before Lexilla.h
 #include "ILexer.h"
@@ -102,6 +105,7 @@ struct LogicalDocumentState {
     DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
     DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
     DiskBaseline diskBaseline;
+    QString explicitLanguage;
 };
 
 struct FileSearchProgressState {
@@ -158,6 +162,16 @@ public:
     void setRecoveryCheckpointBlocked(bool blocked) { m_state->recoveryCheckpointBlocked = blocked; }
     void setSessionManager(SessionManager* sessionManager) { m_state->sessionManager = sessionManager; }
     QSharedPointer<LogicalDocumentState> sharedState() const { return m_state; }
+    QString language() const {
+        return m_state->explicitLanguage.isEmpty()
+            ? LanguageCatalog::detectForPath(m_state->filePath) : m_state->explicitLanguage;
+    }
+    bool hasExplicitLanguage() const { return !m_state->explicitLanguage.isEmpty(); }
+    void setExplicitLanguage(const QString &language) {
+        m_state->explicitLanguage = language;
+        applyLexer();
+    }
+    void applyLanguage() { applyLexer(); }
     DiskBaseline diskBaseline() const { return m_state->diskBaseline; }
     void setDiskBaseline(const DiskBaseline &baseline) { m_state->diskBaseline = baseline; }
     DocumentFormat::TextEncoding encoding() const { return m_state->encoding; }
@@ -250,8 +264,9 @@ private:
                 int charWidth = editor->send(SCI_TEXTWIDTH, STYLE_LINENUMBER, reinterpret_cast<sptr_t>("9"));
                 int marginWidth = charWidth * (maxLineDigits + 1); // Add extra space for padding
 
-                // Set the margin width
-                editor->send(SCI_SETMARGINWIDTHN, 0, marginWidth);
+                // Keep an explicitly hidden margin hidden while the document changes.
+                if (editor->send(SCI_GETMARGINWIDTHN, 0) > 0)
+                    editor->send(SCI_SETMARGINWIDTHN, 0, marginWidth);
             }
         }
     }
@@ -271,66 +286,17 @@ private:
     }
 
     void applyLexer() {
-        // If we have a file path, determine the appropriate lexer
-        if (!m_state->filePath.isEmpty()) {
-            QString extension = QFileInfo(m_state->filePath).suffix().toLower();
-
-            // Determine lexer based on extension
-            QString lexerName = "null";  // Default to null lexer
-
-            if (extension == "cpp" || extension == "cxx" || extension == "cc" ||
-                extension == "c" || extension == "h" || extension == "hpp" ||
-                extension == "hh") {
-                lexerName = "cpp";
-            } else if (extension == "py") {
-                lexerName = "python";
-            } else if (extension == "js" || extension == "mjs" || extension == "cjs") {
-                lexerName = "javascript";
-            } else if (extension == "json") {
-                lexerName = "json";
-            } else if (extension == "xml" || extension == "xhtml" || extension == "svg") {
-                lexerName = "xml";
-            } else if (extension == "html" || extension == "htm") {
-                lexerName = "hypertext";
-            } else if (extension == "css") {
-                lexerName = "css";
-            } else if (extension == "sh" || extension == "bash") {
-                lexerName = "bash";
-            } else if (extension == "ini" || extension == "cfg" || extension == "conf") {
-                lexerName = "properties";
-            } else if (extension == "yaml" || extension == "yml") {
-                lexerName = "yaml";
-            } else if (extension == "md" || extension == "markdown") {
-                lexerName = "markdown";
-            } else if (extension == "sql") {
-                lexerName = "sql";
-            } else if (extension == "java") {
-                lexerName = "java";
-            }
-
-            // Create and apply the lexer
-            Scintilla::ILexer5* lexer = CreateLexer(lexerName.toStdString().c_str());
-            if (lexer) {
-                editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
-
-                // Apply styling for the lexer
-                setupLexerStyling(lexerName);
-            }
-        } else {
-            // For untitled documents, use null lexer
-            Scintilla::ILexer5* lexer = CreateLexer("null");
-            if (lexer) {
-                editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
-                setupLexerStyling("null");
-            }
-        }
+        const QString id = language();
+        if (!LanguageCatalog::apply(editor, id))
+            LanguageCatalog::apply(editor, QStringLiteral("plain"));
+        setupLexerStyling(id);
     }
 
     void setupLexerStyling(const QString& lexerName) {
         // Clear existing styles
         editor->send(SCI_CLEARDOCUMENTSTYLE);
 
-        if (lexerName == "cpp") {
+        if (lexerName == "cpp" || lexerName == "c" || lexerName == "csharp") {
             // Keywords (blue)
             editor->send(SCI_STYLESETFORE, SCE_C_WORD, 0x0000FF);  // Keyword color
 
@@ -350,11 +316,32 @@ private:
             // Preprocessor
             editor->send(SCI_STYLESETFORE, SCE_C_PREPROCESSOR, 0x008080);  // Preprocessor color
 
-            // Set keywords
-            const char* cppKeywords = "auto break case char const continue default do double else enum "
-                                      "extern float for goto if int long register return short signed sizeof "
-                                      "static struct switch typedef union unsigned void volatile while";
-            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(cppKeywords));
+            // Set the language-specific keywords used by the shared C-family lexer.
+            const char *keywords = nullptr;
+            if (lexerName == QStringLiteral("c")) {
+                keywords = "auto break case char const continue default do double else enum "
+                           "extern float for goto if int long register return short signed sizeof "
+                           "static struct switch typedef union unsigned void volatile while";
+            } else if (lexerName == QStringLiteral("cpp")) {
+                keywords = "alignas alignof and and_eq asm auto bitand bitor bool break case catch "
+                           "char char8_t char16_t char32_t class compl concept const consteval constexpr "
+                           "constinit const_cast continue co_await co_return co_yield decltype default "
+                           "delete do double dynamic_cast else enum explicit export extern false float "
+                           "for friend goto if inline int long mutable namespace new noexcept not not_eq "
+                           "nullptr operator or or_eq private protected public register reinterpret_cast "
+                           "requires return short signed sizeof static static_assert static_cast struct "
+                           "switch template this thread_local throw true try typedef typeid typename "
+                           "union unsigned using virtual void volatile wchar_t while xor xor_eq";
+            } else {
+                keywords = "abstract as base bool break byte case catch char checked class const continue "
+                           "decimal default delegate do double else enum event explicit extern false "
+                           "finally fixed float for foreach goto if implicit in int interface internal is "
+                           "lock long namespace new null object operator out override params private "
+                           "protected public readonly ref return sbyte sealed short sizeof stackalloc static "
+                           "string struct switch this throw true try typeof uint ulong unchecked unsafe "
+                           "ushort using virtual void volatile while async await record required";
+            }
+            editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(keywords));
 
         } else if (lexerName == "python") {
             // Keywords (blue)
@@ -374,9 +361,10 @@ private:
             editor->send(SCI_STYLESETFORE, SCE_P_OPERATOR, 0x000000);  // Operator color
 
             // Set keywords
-            const char* pythonKeywords = "and as assert break class continue def del elif else "
-                                         "except exec finally for from global if import in is "
-                                         "lambda not or pass print raise return try while with yield";
+            const char* pythonKeywords = "False None True and as assert async await break class "
+                                         "continue def del elif else except finally for from global "
+                                         "if import in is lambda nonlocal not or pass raise return "
+                                         "try while with yield";
             editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(pythonKeywords));
 
         } else if (lexerName == "javascript") {
@@ -429,7 +417,7 @@ private:
             // Numbers (brown)
             editor->send(SCI_STYLESETFORE, SCE_H_NUMBER, 0xA52A2A);  // Number color
 
-        } else if (lexerName == "hypertext") {
+        } else if (lexerName == "html") {
             // Tags (blue)
             editor->send(SCI_STYLESETFORE, SCE_H_TAG, 0x0000FF);  // Tag color
 
@@ -561,14 +549,14 @@ private:
             // Set keywords
             const char* javaKeywords = "abstract assert boolean break byte case catch char class "
                                        "const continue default do double else enum extends final "
-                                       "finally float for goto if implements import instanceOf int "
+                                       "finally float for goto if implements import instanceof int "
                                        "interface long native new package private protected public "
                                        "return short static strictfp super switch synchronized this "
                                        "throw throws transient try void volatile while";
             editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(javaKeywords));
 
-        } else if (lexerName == "null") {
-            // Default styling for null lexer
+        } else if (lexerName == "plain") {
+            // Default styling for normal text
             editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, 0x000000);  // Black text
             editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, 0xFFFFFF);  // White background
         }
@@ -590,6 +578,8 @@ class MainWindow : public QMainWindow {
 
 public:
     MainWindow(QWidget *parent = nullptr) : QMainWindow(parent) {
+        QSettings initialSettings;
+        m_preferences = EditorPreferencesStore::load(initialSettings);
         m_macroManager = new MacroManager(this);
         setupUI();
         setupActions();
@@ -630,8 +620,12 @@ public:
         connect(findReplaceDialog, &FindReplaceDialog::clearMarksRequested, this, [this] { if(auto *tab=getCurrentTab()) m_searchManager.clearMarks(tab->getEditor()); });
 
         QSettings settings;
-        restoreGeometry(settings.value(QStringLiteral("mainWindow/geometry")).toByteArray());
-        restoreState(settings.value(QStringLiteral("mainWindow/state")).toByteArray());
+        if (m_preferences.rememberWindowState) {
+            restoreGeometry(settings.value(QStringLiteral("mainWindow/geometry")).toByteArray());
+            restoreState(settings.value(QStringLiteral("mainWindow/state")).toByteArray());
+        }
+        toolBar->setVisible(m_preferences.toolbarVisible);
+        statusBar->setVisible(m_preferences.statusBarVisible);
         fileBrowserWidget->setRootPath(
             settings.value(QStringLiteral("fileBrowser/root"), QDir::homePath()).toString());
         refreshPanels();
@@ -703,6 +697,7 @@ private slots:
     void cloneToOtherView();
     void setEncoding(DocumentFormat::TextEncoding encoding);
     void convertEols(DocumentFormat::EolKind eol);
+    void showPreferences();
 
     // Find/Replace functions (restored)
     void findNext();
@@ -747,6 +742,9 @@ private:
     void updateMacroActions();
     void rebuildSavedMacroMenu();
     void updateFormatActions();
+    void updateLanguageActions();
+    void selectLanguage(const QString &language);
+    void applyPreferences(const EditorPreferences &preferences);
     SearchRequest searchRequest(bool wholeDocument = false) const;
     void showSearchResults(const QVector<SearchResultItem> &results);
     void navigateSearchResult(int index);
@@ -842,6 +840,8 @@ private:
     QAction *eolCrLfAction = nullptr;
     QAction *eolLfAction = nullptr;
     QAction *eolCrAction = nullptr;
+    QActionGroup *languageActionGroup = nullptr;
+    QAction *preferencesAction = nullptr;
 
     // Find/Replace dialog
     FindReplaceDialog *findReplaceDialog;
@@ -870,6 +870,7 @@ private:
     QStringList m_documentListIds;
     bool m_loadingSession = false;
     MacroManager *m_macroManager = nullptr;
+    EditorPreferences m_preferences;
 };
 
 void MainWindow::setupUI() {
@@ -1028,8 +1029,11 @@ void MainWindow::setupActions() {
     zoomInAction = new QAction("Zoom In", this);
     zoomOutAction = new QAction("Zoom Out", this);
     wordWrapAction = new QAction("Word Wrap", this);
+    wordWrapAction->setObjectName(QStringLiteral("wordWrapAction"));
     showAllCharactersAction = new QAction("Show All Characters", this);
+    showAllCharactersAction->setObjectName(QStringLiteral("showAllCharactersAction"));
     indentGuideAction = new QAction("Indent Guide", this);
+    indentGuideAction->setObjectName(QStringLiteral("indentGuideAction"));
     functionListAction = new QAction("Function List", this);
     documentMapAction = new QAction("Document Map", this);
     fileBrowserAction = new QAction("File Browser", this);
@@ -1092,6 +1096,24 @@ void MainWindow::setupActions() {
                                DocumentFormat::EolKind::Lf);
     eolCrAction = addEolAction(tr("Macintosh (CR)"), QStringLiteral("eolCrAction"),
                                DocumentFormat::EolKind::Cr);
+
+    languageActionGroup = new QActionGroup(this);
+    languageActionGroup->setExclusive(true);
+    for (const auto &language : LanguageCatalog::definitions()) {
+        QAction *item = languageMenu->addAction(language.displayName);
+        QString suffix = language.id;
+        suffix[0] = suffix[0].toUpper();
+        item->setObjectName(QStringLiteral("language%1Action").arg(suffix));
+        item->setData(language.id);
+        item->setCheckable(true);
+        languageActionGroup->addAction(item);
+        connect(item, &QAction::triggered, this,
+                [this, id = language.id] { selectLanguage(id); });
+    }
+    preferencesAction = settingsMenu->addAction(tr("Preferences…"));
+    preferencesAction->setObjectName(QStringLiteral("preferencesAction"));
+    preferencesAction->setShortcut(QKeySequence::Preferences);
+    connect(preferencesAction, &QAction::triggered, this, &MainWindow::showPreferences);
     syncVerticalAction->setObjectName(QStringLiteral("synchronizeVerticalScrollingAction"));
     syncHorizontalAction->setObjectName(QStringLiteral("synchronizeHorizontalScrollingAction"));
     syncVerticalAction->setText(tr("Synchronize Vertical Scrolling"));
@@ -1477,22 +1499,9 @@ void MainWindow::showReplaceDialog() {
 }
 
 void MainWindow::toggleWordWrap() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-
-    // Get current wrap mode
-    int currentWrapMode = editor->send(SCI_GETWRAPMODE);
-
-    // Toggle wrap mode
-    int newWrapMode = (currentWrapMode == SC_WRAP_WORD) ? SC_WRAP_NONE : SC_WRAP_WORD;
-
-    // Apply the new wrap mode
-    editor->send(SCI_SETWRAPMODE, newWrapMode);
-
-    // Update the action's checked state
-    wordWrapAction->setChecked(newWrapMode == SC_WRAP_WORD);
+    if (!getCurrentTab()) return;
+    m_preferences.wordWrap = wordWrapAction->isChecked();
+    applyPreferences(m_preferences);
 }
 
 void MainWindow::zoomIn() {
@@ -1516,48 +1525,15 @@ void MainWindow::zoomOut() {
 }
 
 void MainWindow::showAllCharacters() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-
-    // Get current state
-    int currentViewWS = editor->send(SCI_GETVIEWWS);
-    bool isCurrentlyVisible = (currentViewWS == SCWS_VISIBLEALWAYS);
-
-    // Toggle the visibility
-    int newViewWS = isCurrentlyVisible ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS;
-
-    // Apply the new setting
-    editor->send(SCI_SETVIEWWS, newViewWS);
-
-    // Also toggle EOL visibility
-    bool currentViewEOL = editor->send(SCI_GETVIEWEOL);
-    int newViewEOL = currentViewEOL ? 0 : 1;
-    editor->send(SCI_SETVIEWEOL, newViewEOL);
-
-    // Update the action's checked state
-    showAllCharactersAction->setChecked(!isCurrentlyVisible);
+    if (!getCurrentTab()) return;
+    m_preferences.showWhitespace = showAllCharactersAction->isChecked();
+    applyPreferences(m_preferences);
 }
 
 void MainWindow::indentGuides() {
-    DocumentTab* currentTab = getCurrentTab();
-    if (!currentTab) return;
-
-    ScintillaEditBase* editor = currentTab->getEditor();
-
-    // Get current state
-    int currentIndentGuides = editor->send(SCI_GETINDENTATIONGUIDES);
-    bool isCurrentlyVisible = (currentIndentGuides == SC_IV_LOOKFORWARD);
-
-    // Toggle the visibility
-    int newIndentGuides = isCurrentlyVisible ? SC_IV_NONE : SC_IV_LOOKFORWARD;
-
-    // Apply the new setting
-    editor->send(SCI_SETINDENTATIONGUIDES, newIndentGuides);
-
-    // Update the action's checked state
-    indentGuideAction->setChecked(!isCurrentlyVisible);
+    if (!getCurrentTab()) return;
+    m_preferences.indentGuides = indentGuideAction->isChecked();
+    applyPreferences(m_preferences);
 }
 
 void MainWindow::tabChanged(int index) {
@@ -1569,6 +1545,7 @@ void MainWindow::tabChanged(int index) {
     updateMacroActions();
     updateDualViewActions();
     updateFormatActions();
+    updateLanguageActions();
 
     // Update word wrap action state to match current tab
     DocumentTab* currentTab = getCurrentTab();
@@ -1670,6 +1647,10 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
                                    ? restoredUntitledNumber
                                    : lowestAvailableUntitledNumber();
     DocumentTab* newTab = new DocumentTab(filePath, assignedNumber, documentId, this);
+    if (filePath.isEmpty())
+        newTab->setDocumentFormat(m_preferences.defaultEncoding, DocumentFormat::EolKind::None,
+                                  m_preferences.defaultEol);
+    EditorPreferencesStore::apply(newTab->getEditor(), m_preferences);
 
     wireDocumentView(newTab);
 
@@ -1712,6 +1693,7 @@ void MainWindow::createNewTab(const QString& filePath, const QString &documentId
     dualViewManager->updatePaneVisibility();
     updateDualViewActions();
     updateFormatActions();
+    updateLanguageActions();
 }
 
 void MainWindow::wireDocumentView(DocumentTab *tab)
@@ -1906,6 +1888,7 @@ bool MainWindow::loadFile(const QString &filePath, QString *error) {
         currentTab->setDocumentFormat(decoded.encoding, decoded.eol.kind, decoded.eol.insertion);
         currentTab->getEditor()->send(SCI_SETSAVEPOINT);
         currentTab->setFilePath(filePath);
+        EditorPreferencesStore::apply(currentTab->getEditor(), m_preferences);
         currentTab->setDiskBaseline(baselineForBytes(filePath, content));
         currentTab->setDirty(false);
         currentTab->checkpoint();
@@ -1914,6 +1897,7 @@ bool MainWindow::loadFile(const QString &filePath, QString *error) {
 
     // Update status bar after loading file
     updateStatusBar();
+    updateLanguageActions();
 
     return true;
 }
@@ -2015,6 +1999,9 @@ MainWindow::SavePreparation MainWindow::prepareOrdinarySave(DocumentTab *tab, QS
             this, tr("Save File"), tab->getFilePath(), tr("All Files (*)"));
         if (!destination.isEmpty() && saveFileToPath(destination, tab, error)) {
             tab->setFilePath(destination);
+            for (DocumentTab *view : documentViews())
+                if (view->documentId() == tab->documentId()) view->applyLanguage();
+            updateLanguageActions();
             tab->setRecoveryWarning({});
             tab->setRecoveryCheckpointBlocked(false);
             tab->checkpoint();
@@ -2110,6 +2097,9 @@ bool MainWindow::saveTab(DocumentTab *tab, bool forceSaveAs)
     if (!saveFileToPath(destination, tab))
         return false;
     tab->setFilePath(destination);
+    for (DocumentTab *view : documentViews())
+        if (view->documentId() == tab->documentId()) view->applyLanguage();
+    updateLanguageActions();
     tab->setRecoveryWarning({});
     tab->setRecoveryCheckpointBlocked(false);
     tab->checkpoint();
@@ -2181,6 +2171,9 @@ bool MainWindow::saveCurrentAs(const QString &path, QString *error)
     if (!saveFileToPath(path, tab, error))
         return false;
     tab->setFilePath(path);
+    for (DocumentTab *view : documentViews())
+        if (view->documentId() == tab->documentId()) view->applyLanguage();
+    updateLanguageActions();
     tab->setRecoveryWarning({});
     tab->setRecoveryCheckpointBlocked(false);
     tab->checkpoint();
@@ -2336,6 +2329,8 @@ void MainWindow::loadSession() {
                 auto *clone = new DocumentTab({}, 0, {}, this, original->sharedState());
                 clone->getEditor()->send(SCI_SETDOCPOINTER, 0, original->getEditor()->send(SCI_GETDOCPOINTER));
                 clone->setDocumentFormat(original->encoding(), original->eol(), original->insertionEol());
+                clone->applyLanguage();
+                EditorPreferencesStore::apply(clone->getEditor(), m_preferences);
                 wireDocumentView(clone);
                 secondaryTabWidget->addTab(clone, tabWidget->tabText(tabWidget->indexOf(original)));
             } else {
@@ -2598,6 +2593,57 @@ void MainWindow::updateFormatActions()
     eolCrAction->setChecked(tab->insertionEol() == DocumentFormat::EolKind::Cr);
 }
 
+void MainWindow::updateLanguageActions()
+{
+    DocumentTab *tab = getCurrentTab();
+    for (QAction *item : languageActionGroup->actions()) {
+        item->setEnabled(tab != nullptr);
+        item->setChecked(tab && item->data().toString() == tab->language());
+    }
+}
+
+void MainWindow::selectLanguage(const QString &language)
+{
+    DocumentTab *tab = getCurrentTab();
+    if (!tab || !LanguageCatalog::find(language)) return;
+    tab->setExplicitLanguage(language);
+    for (DocumentTab *view : documentViews()) {
+        if (view->documentId() != tab->documentId() || view == tab) continue;
+        view->applyLanguage();
+    }
+    for (DocumentTab *view : documentViews())
+        if (view->documentId() == tab->documentId())
+            EditorPreferencesStore::apply(view->getEditor(), m_preferences);
+    updateLanguageActions();
+}
+
+void MainWindow::applyPreferences(const EditorPreferences &preferences)
+{
+    m_preferences = preferences;
+    QSettings settings;
+    EditorPreferencesStore::save(settings, m_preferences);
+    settings.sync();
+    for (DocumentTab *tab : documentViews())
+        EditorPreferencesStore::apply(tab->getEditor(), m_preferences);
+    toolBar->setVisible(m_preferences.toolbarVisible);
+    statusBar->setVisible(m_preferences.statusBarVisible);
+    tabChanged(0);
+}
+
+void MainWindow::showPreferences()
+{
+    if (auto *existing = findChild<PreferencesDialog *>(QStringLiteral("preferencesDialog"))) {
+        existing->setPreferences(m_preferences);
+        existing->show();
+        existing->raise();
+        existing->activateWindow();
+        return;
+    }
+    auto *dialog = new PreferencesDialog(m_preferences,
+        [this](const EditorPreferences &preferences) { applyPreferences(preferences); }, this);
+    dialog->show();
+}
+
 void MainWindow::setEncoding(DocumentFormat::TextEncoding encoding)
 {
     DocumentTab *tab = getCurrentTab();
@@ -2677,6 +2723,8 @@ void MainWindow::cloneToOtherView()
     auto *clone = new DocumentTab({}, 0, {}, this, original->sharedState());
     clone->getEditor()->send(SCI_SETDOCPOINTER, 0, original->getEditor()->send(SCI_GETDOCPOINTER));
     clone->setDocumentFormat(original->encoding(), original->eol(), original->insertionEol());
+    clone->applyLanguage();
+    EditorPreferencesStore::apply(clone->getEditor(), m_preferences);
     wireDocumentView(clone);
     const int index = target->addTab(clone, source->tabText(source->currentIndex()));
     dualViewManager->activate(target, index);
@@ -2815,8 +2863,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
         checkpoint = saveSession();
     }
     QSettings settings;
-    settings.setValue(QStringLiteral("mainWindow/geometry"), saveGeometry());
-    settings.setValue(QStringLiteral("mainWindow/state"), saveState());
+    if (m_preferences.rememberWindowState) {
+        settings.setValue(QStringLiteral("mainWindow/geometry"), saveGeometry());
+        settings.setValue(QStringLiteral("mainWindow/state"), saveState());
+    } else {
+        settings.remove(QStringLiteral("mainWindow/geometry"));
+        settings.remove(QStringLiteral("mainWindow/state"));
+    }
     settings.setValue(QStringLiteral("fileBrowser/root"), fileBrowserWidget->rootPath());
     event->accept();
 }

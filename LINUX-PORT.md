@@ -38,6 +38,8 @@ The Linux port builds and runs natively and already has a usable core editor. It
 - Notepad++ toolbar icons
 - Tab close buttons
 - Basic Notepad++-style menus and toolbar
+- Native Preferences dialog for editor, new-document, and window settings
+- Explicit and extension-detected language selection for the supported Lexilla lexers
 
 ### Working but still being expanded or validated
 
@@ -54,9 +56,8 @@ The Linux port builds and runs natively and already has a usable core editor. It
 - Document Map
 - Macro recording / playback
 - Synchronized scrolling
-- Full language-selection workflow
 - Complete encoding / EOL handling
-- Preferences parity
+- Full upstream Preferences parity
 - Plugin compatibility
 - Broad Linux distribution packaging and testing
 
@@ -70,6 +71,15 @@ The Linux port currently uses:
 - **CMake** for the Linux build system
 
 Where practical, Linux-specific implementation is kept under `linux/` so that the port can continue following upstream Notepad++ without unnecessarily modifying the shared source tree.
+
+Explicit language choices are shared by cloned views and survive Save As path changes during the
+current run. They are not yet written into recovery/session metadata, so a restored document returns
+to extension-based language detection. This avoids a fragile recovery-schema change until language
+metadata can be migrated and validated atomically.
+
+Previous-session restoration remains always enabled. A disable-restore preference is intentionally
+not exposed yet because the current recovery store cannot replace a prior session transactionally
+without risking deletion of recoverable snapshots before a durable shutdown checkpoint.
 
 ## Building on Linux
 

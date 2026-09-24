@@ -46,6 +46,8 @@ list(FILTER LEXILLA_LEXER_SOURCES EXCLUDE REGEX ".*/LexUser\\.cxx$")
 
 add_library(textpinnacle_support STATIC
     findreplace.cpp
+    editorpreferences.cpp
+    languagecatalog.cpp
     settingsmigration.cpp
     searchmanager.cpp
     sessionmanager.cpp
@@ -84,7 +86,7 @@ target_compile_options(textpinnacle_support PRIVATE -include cstdint)
 target_link_libraries(textpinnacle_support PUBLIC Qt6::Widgets Qt6::Core5Compat Qt6::PrintSupport Qt6::Concurrent)
 target_compile_features(textpinnacle_support PUBLIC cxx_std_17)
 
-add_library(textpinnacle_app STATIC mainwindow.cpp startupfiles.cpp)
+add_library(textpinnacle_app STATIC mainwindow.cpp startupfiles.cpp preferencesdialog.cpp)
 target_link_libraries(textpinnacle_app PUBLIC textpinnacle_support)
 
 add_executable(textpinnacle main.cpp resources.qrc)
@@ -139,6 +141,11 @@ if(BUILD_TESTING)
     target_link_libraries(linux_startup_argument_tests PRIVATE textpinnacle_app)
     add_test(NAME linux_startup_argument_tests COMMAND linux_startup_argument_tests)
     set_tests_properties(linux_startup_argument_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(linux_preferences_language_tests tests/preferenceslanguagetests.cpp)
+    target_link_libraries(linux_preferences_language_tests PRIVATE textpinnacle_app)
+    add_test(NAME linux_preferences_language_tests COMMAND linux_preferences_language_tests)
+    set_tests_properties(linux_preferences_language_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_test(NAME linux_release_gating_tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/releasegatingtest.py")
