@@ -36,6 +36,8 @@ struct RecoveryDocument {
     DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
     DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
     bool legacyEncodedSnapshot = false;
+    QString languageId = QStringLiteral("plain");
+    bool languageAutomatic = true;
 };
 
 struct DocumentCheckpoint {
@@ -46,6 +48,17 @@ struct DocumentCheckpoint {
     DocumentFormat::TextEncoding encoding = DocumentFormat::TextEncoding::Utf8;
     DocumentFormat::EolKind eol = DocumentFormat::EolKind::None;
     DocumentFormat::EolKind insertionEol = DocumentFormat::EolKind::Lf;
+    QString languageId = QStringLiteral("plain");
+    bool languageAutomatic = true;
+};
+
+struct RecoveryViewState {
+    QString documentId;
+    QString pane;
+    qint64 position = 0;
+    qint64 anchor = 0;
+    int firstVisibleLine = 0;
+    int xOffset = 0;
 };
 
 struct RecoveryReadResult {
@@ -67,7 +80,7 @@ class SessionManager : public QObject
     Q_OBJECT
 
 public:
-    static constexpr int SchemaVersion = 4;
+    static constexpr int SchemaVersion = 5;
     static constexpr int DefaultCheckpointIntervalMs = 1000;
 
     explicit SessionManager(QObject *parent = nullptr,
@@ -83,6 +96,7 @@ public:
     void setDualViewLayout(const QStringList &primaryIds, const QStringList &secondaryIds,
                            const QString &activePane, Qt::Orientation orientation,
                            const QList<int> &splitterSizes);
+    void setViewStates(const QVector<RecoveryViewState> &states);
     CheckpointStatus flush();
     CheckpointStatus shutdown();
 
@@ -93,6 +107,7 @@ public:
     QString activePane() const { return m_activePane; }
     Qt::Orientation splitterOrientation() const { return m_splitterOrientation; }
     QList<int> splitterSizes() const { return m_splitterSizes; }
+    QVector<RecoveryViewState> viewStates() const { return m_viewStates; }
     RecoveryReadResult readRecoveryContent(const RecoveryDocument &document) const;
     QStringList diagnostics() const;
     QString storageDirectory() const;
@@ -120,6 +135,7 @@ private:
     bool loadVersion2(const QJsonObject &root);
     bool loadVersion3(const QJsonObject &root);
     bool loadVersion4(const QJsonObject &root);
+    bool loadVersion5(const QJsonObject &root);
     bool canonicalizeLegacySnapshots(bool allowMissingSnapshots = false);
     bool importLegacyDirectory(const QString &directory);
 
@@ -134,6 +150,7 @@ private:
     QString m_activePane = QStringLiteral("primary");
     Qt::Orientation m_splitterOrientation = Qt::Horizontal;
     QList<int> m_splitterSizes;
+    QVector<RecoveryViewState> m_viewStates;
     QStringList m_diagnostics;
     QHash<QString, QByteArray> m_pendingSnapshots;
     QStringList m_obsoleteSnapshots;

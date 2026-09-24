@@ -1,6 +1,7 @@
 #include "documentlist.h"
 
 #include <QFileInfo>
+#include <QAction>
 #include <QSignalBlocker>
 
 DocumentList::DocumentList(QWidget *parent)
@@ -15,6 +16,27 @@ DocumentList::DocumentList(QWidget *parent)
     connect(m_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         emit documentActivated(item->data(Qt::UserRole).toInt());
     });
+    m_list->setContextMenuPolicy(Qt::ActionsContextMenu);
+    const auto addRequest = [this](const QString &text, const QString &name,
+                                   auto signal) {
+        QAction *action = new QAction(text, m_list);
+        action->setObjectName(name);
+        m_list->addAction(action);
+        connect(action, &QAction::triggered, this, [this, signal] {
+            if (QListWidgetItem *item = m_list->currentItem())
+                emit (this->*signal)(item->data(Qt::UserRole).toInt());
+        });
+    };
+    addRequest(tr("Activate"), QStringLiteral("documentListActivateAction"),
+               &DocumentList::documentActivated);
+    addRequest(tr("Save"), QStringLiteral("documentListSaveAction"),
+               &DocumentList::saveRequested);
+    addRequest(tr("Close"), QStringLiteral("documentListCloseAction"),
+               &DocumentList::closeRequested);
+    addRequest(tr("Close Others"), QStringLiteral("documentListCloseOthersAction"),
+               &DocumentList::closeOthersRequested);
+    addRequest(tr("Close to the Right"), QStringLiteral("documentListCloseRightAction"),
+               &DocumentList::closeRightRequested);
 }
 
 void DocumentList::setDocuments(const QVector<DocumentListEntry> &documents, int activeIndex)

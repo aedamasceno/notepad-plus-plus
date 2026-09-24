@@ -1,4 +1,5 @@
 #include "sessionmanager.h"
+#include "languagecatalog.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -11,6 +12,7 @@
 #include <QSignalBlocker>
 #include <QSet>
 #include <QStandardPaths>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -181,7 +183,8 @@ void SessionManager::loadSession()
         return;
     }
     const int schemaVersion = int(parsedSchemaVersion);
-    if (schemaVersion != 2 && schemaVersion != 3 && schemaVersion != SchemaVersion) {
+    if (schemaVersion != 2 && schemaVersion != 3 && schemaVersion != 4 &&
+        schemaVersion != SchemaVersion) {
         m_writesBlocked = true;
         m_diagnostics << QStringLiteral("Unsupported session schema retained at %1; recovery writes are disabled")
                              .arg(m_sessionFilePath);
@@ -201,8 +204,69 @@ void SessionManager::loadSession()
         if (loadVersion3(root) && canonicalizeLegacySnapshots())
             m_metadataDirty = true;
     }
-    else
+    else if (schemaVersion == 4)
         loadVersion4(root);
+    else
+        loadVersion5(root);
+}
+
+bool SessionManager::loadVersion5(const QJsonObject &root)
+{
+    if (!loadVersion4(root))
+        return false;
+    QHash<QString, QJsonObject> storedById;
+    for (const QJsonValue &value : root.value(QStringLiteral("documents")).toArray()) {
+        if (!value.isObject()) continue;
+        const QJsonObject object = value.toObject();
+        storedById.insert(object.value(QStringLiteral("id")).toString(), object);
+    }
+    for (RecoveryDocument &document : m_documents) {
+        const QJsonObject object = storedById.value(document.id);
+        const QJsonValue language = object.value(QStringLiteral("languageId"));
+        const QJsonValue automatic = object.value(QStringLiteral("languageAutomatic"));
+        if (language.isString() && LanguageCatalog::find(language.toString()) && automatic.isBool()) {
+            document.languageId = language.toString();
+            document.languageAutomatic = automatic.toBool();
+        } else {
+            m_diagnostics << QStringLiteral("Optional language state was malformed for %1; automatic detection will be used")
+                                 .arg(document.id);
+        }
+    }
+
+    const QJsonValue viewsValue = root.value(QStringLiteral("views"));
+    if (!viewsValue.isArray()) {
+        m_diagnostics << QStringLiteral("Optional editor view state was malformed and was ignored");
+        return true;
+    }
+    QSet<QString> known;
+    for (const RecoveryDocument &document : std::as_const(m_documents)) known.insert(document.id);
+    QSet<QString> seen;
+    QVector<RecoveryViewState> parsed;
+    bool valid = true;
+    for (const QJsonValue &value : viewsValue.toArray()) {
+        if (!value.isObject()) { valid = false; break; }
+        const QJsonObject object = value.toObject();
+        const QJsonValue id = object.value(QStringLiteral("documentId"));
+        const QJsonValue pane = object.value(QStringLiteral("pane"));
+        qint64 position = 0, anchor = 0, first = 0, x = 0;
+        if (!id.isString() || !known.contains(id.toString()) || !pane.isString() ||
+            (pane.toString() != QStringLiteral("primary") && pane.toString() != QStringLiteral("secondary")) ||
+            !jsonInteger(object.value(QStringLiteral("position")), 0, qint64(1) << 53, &position) ||
+            !jsonInteger(object.value(QStringLiteral("anchor")), 0, qint64(1) << 53, &anchor) ||
+            !jsonInteger(object.value(QStringLiteral("firstVisibleLine")), 0, std::numeric_limits<int>::max(), &first) ||
+            !jsonInteger(object.value(QStringLiteral("xOffset")), 0, std::numeric_limits<int>::max(), &x)) {
+            valid = false; break;
+        }
+        const QString key = id.toString() + QLatin1Char('\n') + pane.toString();
+        if (seen.contains(key)) { valid = false; break; }
+        seen.insert(key);
+        parsed.push_back({id.toString(), pane.toString(), position, anchor, int(first), int(x)});
+    }
+    if (valid)
+        m_viewStates = parsed;
+    else
+        m_diagnostics << QStringLiteral("Optional editor view state was malformed and was ignored");
+    return true;
 }
 
 bool SessionManager::loadVersion4(const QJsonObject &root)
@@ -541,6 +605,9 @@ void SessionManager::updateDocument(const DocumentCheckpoint &checkpoint, const 
     document.encoding = checkpoint.encoding;
     document.eol = checkpoint.eol;
     document.insertionEol = checkpoint.insertionEol;
+    document.languageId = checkpoint.languageId.isEmpty() ? QStringLiteral("plain")
+                                                           : checkpoint.languageId;
+    document.languageAutomatic = checkpoint.languageAutomatic;
     document.legacyEncodedSnapshot = false;
     document.recoveryState = RecoveryState::Ready;
     if (document.dirty) {
@@ -581,6 +648,9 @@ void SessionManager::removeDocument(const QString &id)
     const QString snapshot = absoluteSnapshotPath(m_documents[index]);
     m_documents.removeAt(index);
     m_pendingSnapshots.remove(id);
+    m_viewStates.erase(std::remove_if(m_viewStates.begin(), m_viewStates.end(),
+        [&id](const RecoveryViewState &state) { return state.documentId == id; }),
+        m_viewStates.end());
     if (!snapshot.isEmpty() && QFileInfo::exists(snapshot) &&
         !m_obsoleteSnapshots.contains(snapshot))
         m_obsoleteSnapshots << snapshot;
@@ -626,6 +696,15 @@ void SessionManager::setDualViewLayout(const QStringList &primaryIds,
     m_activePane = activePane == QStringLiteral("secondary") ? activePane : QStringLiteral("primary");
     m_splitterOrientation = orientation;
     m_splitterSizes = splitterSizes;
+    m_metadataDirty = true;
+    scheduleCheckpoint();
+}
+
+void SessionManager::setViewStates(const QVector<RecoveryViewState> &states)
+{
+    if (m_writesBlocked)
+        return;
+    m_viewStates = states;
     m_metadataDirty = true;
     scheduleCheckpoint();
 }
@@ -812,6 +891,8 @@ CheckpointStatus SessionManager::writeCheckpoint()
         object.insert(QStringLiteral("encoding"), DocumentFormat::encodingKey(document.encoding));
         object.insert(QStringLiteral("eol"), DocumentFormat::eolKey(document.eol));
         object.insert(QStringLiteral("insertionEol"), DocumentFormat::eolKey(document.insertionEol));
+        object.insert(QStringLiteral("languageId"), document.languageId);
+        object.insert(QStringLiteral("languageAutomatic"), document.languageAutomatic);
         documents.append(object);
     }
     QJsonObject root;
@@ -826,6 +907,16 @@ CheckpointStatus SessionManager::writeCheckpoint()
         {QStringLiteral("activePane"), m_activePane},
         {QStringLiteral("orientation"), m_splitterOrientation == Qt::Vertical ? QStringLiteral("vertical") : QStringLiteral("horizontal")},
         {QStringLiteral("sizes"), sizes}});
+    QJsonArray views;
+    for (const RecoveryViewState &state : std::as_const(m_viewStates)) {
+        views.append(QJsonObject{{QStringLiteral("documentId"), state.documentId},
+                                 {QStringLiteral("pane"), state.pane},
+                                 {QStringLiteral("position"), double(state.position)},
+                                 {QStringLiteral("anchor"), double(state.anchor)},
+                                 {QStringLiteral("firstVisibleLine"), state.firstVisibleLine},
+                                 {QStringLiteral("xOffset"), state.xOffset}});
+    }
+    root.insert(QStringLiteral("views"), views);
     root.insert(QStringLiteral("checkpointIntervalMs"), m_checkpointTimer.interval());
     QString error;
     if (!writeAtomic(m_sessionFilePath, QJsonDocument(root).toJson(), &error)) {

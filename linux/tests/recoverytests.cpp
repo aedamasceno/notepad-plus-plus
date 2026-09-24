@@ -24,6 +24,7 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QStandardPaths>
+#include <QSplitter>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -176,6 +177,73 @@ void testSessionRoundTripAndConflictDiagnostics()
     expect(conflicted.readRecoveryContent(conflicted.documents().value(1)).content ==
                QStringLiteral("dirty café\n").toUtf8(),
            "external change does not replace recovered dirty content");
+}
+
+void testSessionLanguageAndIndependentViewStateRoundTrip()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("session"));
+    SessionManager writer(nullptr, sessionDir, 20);
+    writer.loadSession();
+    DocumentCheckpoint automatic{QStringLiteral("auto"), {}, 1, true};
+    automatic.languageId = QStringLiteral("python");
+    automatic.languageAutomatic = true;
+    DocumentCheckpoint explicitCpp{QStringLiteral("explicit"), {}, 2, true};
+    explicitCpp.languageId = QStringLiteral("cpp");
+    explicitCpp.languageAutomatic = false;
+    writer.updateDocument(automatic, "def automatic():\n    pass\n");
+    writer.updateDocument(explicitCpp, "void explicit_language() {}\n");
+    writer.setSessionLayout({"auto", "explicit"}, "explicit");
+    writer.setDualViewLayout({"auto", "explicit"}, {"explicit"}, "secondary",
+                             Qt::Horizontal, {400, 600});
+    writer.setViewStates({
+        {"auto", "primary", 4, 1, 2, 11},
+        {"explicit", "primary", 8, 3, 5, 17},
+        {"explicit", "secondary", 19, 12, 9, 31},
+    });
+    expect(writer.flush() == CheckpointStatus::Durable,
+           "schema-5 language/view fixture is durable");
+
+    SessionManager reader(nullptr, sessionDir, 20);
+    reader.loadSession();
+    expect(SessionManager::SchemaVersion == 5 && !reader.writesBlocked(),
+           "schema 5 reload is accepted");
+    const auto documents = reader.documents();
+    expect(documents.size() == 2 && documents.at(0).languageAutomatic &&
+               documents.at(0).languageId == QStringLiteral("python") &&
+               !documents.at(1).languageAutomatic &&
+               documents.at(1).languageId == QStringLiteral("cpp"),
+           "automatic and explicit logical language state round trips");
+    const auto views = reader.viewStates();
+    expect(views.size() == 3 && views.at(1).position == 8 && views.at(1).anchor == 3 &&
+               views.at(2).position == 19 && views.at(2).anchor == 12 &&
+               views.at(2).firstVisibleLine == 9 && views.at(2).xOffset == 31,
+           "cloned views restore independent caret selection and scroll state");
+
+    QFile metadata(reader.sessionFilePath());
+    expect(metadata.open(QIODevice::ReadOnly), "open schema-5 metadata for optional corruption fixture");
+    QJsonObject malformed = QJsonDocument::fromJson(metadata.readAll()).object();
+    metadata.close();
+    QJsonArray malformedDocuments = malformed.value(QStringLiteral("documents")).toArray();
+    QJsonObject malformedDocument = malformedDocuments.at(0).toObject();
+    malformedDocument.insert(QStringLiteral("languageId"), QStringLiteral("not-supported"));
+    malformedDocument.insert(QStringLiteral("languageAutomatic"), false);
+    malformedDocuments[0] = malformedDocument;
+    malformed.insert(QStringLiteral("documents"), malformedDocuments);
+    malformed.insert(QStringLiteral("views"), QJsonArray{QJsonObject{
+        {QStringLiteral("documentId"), QStringLiteral("auto")},
+        {QStringLiteral("pane"), QStringLiteral("primary")},
+        {QStringLiteral("position"), QStringLiteral("bad")}}});
+    writeBytes(reader.sessionFilePath(), QJsonDocument(malformed).toJson());
+    SessionManager safe(nullptr, sessionDir, 20);
+    safe.loadSession();
+    expect(!safe.writesBlocked() && safe.documents().size() == 2 &&
+               safe.documents().at(0).languageAutomatic &&
+               safe.documents().at(0).languageId == QStringLiteral("plain") &&
+               safe.viewStates().isEmpty() &&
+               safe.readRecoveryContent(safe.documents().at(0)).content ==
+                   QByteArray("def automatic():\n    pass\n"),
+           "malformed optional state defaults safely without losing recovered content");
 }
 
 void testDirtySnapshotReactivationKeepsLatestBytes()
@@ -917,6 +985,92 @@ void testAtomicOrdinarySaveFailurePreservesOriginal()
     expect(!error.isEmpty(), "failed ordinary save surfaces error text");
 }
 
+void testIndependentViewStateRestoresAcrossRestart()
+{
+    QTemporaryDir root;
+    qputenv("NPP_SESSION_DIR", root.filePath(QStringLiteral("view-session")).toUtf8());
+    {
+        std::unique_ptr<QMainWindow> window(createMainWindow());
+        window->resize(900, 500); window->show(); processFor(40);
+        auto *primary = window->findChild<QTabWidget *>("primaryTabWidget");
+        auto *primaryEditor = primary->currentWidget()->findChild<ScintillaEditBase *>();
+        QByteArray content;
+        for (int i = 0; i < 100; ++i) content += QByteArray(120, 'a' + (i % 20)) + '\n';
+        primaryEditor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(content.constData()));
+        actionWithText(window.get(), QStringLiteral("Clone to Other View"))->trigger();
+        auto *secondary = window->findChild<QTabWidget *>("secondaryTabWidget");
+        auto *secondaryEditor = secondary->currentWidget()->findChild<ScintillaEditBase *>();
+        primaryEditor->send(SCI_SETSEL, 3, 11);
+        primaryEditor->send(SCI_SETFIRSTVISIBLELINE, 7);
+        primaryEditor->send(SCI_SETXOFFSET, 13);
+        secondaryEditor->send(SCI_SETSEL, 29, 41);
+        secondaryEditor->send(SCI_SETFIRSTVISIBLELINE, 17);
+        secondaryEditor->send(SCI_SETXOFFSET, 27);
+        secondaryEditor->setFocus(); processFor(180);
+        auto *liveSession = window->findChild<SessionManager *>();
+        expect(liveSession->flush() == CheckpointStatus::Durable,
+               "live view-state checkpoint flushes without graceful close");
+        SessionManager crashReader(nullptr,
+            root.filePath(QStringLiteral("view-session")), 20);
+        crashReader.loadSession();
+        const auto crashViews = crashReader.viewStates();
+        expect(crashViews.size() == 2 &&
+                   crashViews.at(0).anchor == 3 && crashViews.at(0).position == 11 &&
+                   crashViews.at(0).firstVisibleLine == 7 && crashViews.at(0).xOffset == 13 &&
+                   crashViews.at(1).anchor == 29 && crashViews.at(1).position == 41 &&
+                   crashViews.at(1).firstVisibleLine == 17 && crashViews.at(1).xOffset == 27,
+               "debounced live checkpoint persists both clone view states before shutdown");
+        window.reset();
+    }
+    {
+        std::unique_ptr<QMainWindow> restored(createMainWindow());
+        restored->resize(900, 500); restored->show(); processFor(60);
+        auto *primary = restored->findChild<QTabWidget *>("primaryTabWidget");
+        auto *secondary = restored->findChild<QTabWidget *>("secondaryTabWidget");
+        auto *first = primary->currentWidget()->findChild<ScintillaEditBase *>();
+        auto *second = secondary->currentWidget()->findChild<ScintillaEditBase *>();
+        expect(primary->count() == 1 && secondary->count() == 1 &&
+                   first->send(SCI_GETANCHOR) == 3 && first->send(SCI_GETCURRENTPOS) == 11 &&
+                   second->send(SCI_GETANCHOR) == 29 && second->send(SCI_GETCURRENTPOS) == 41,
+               "restart restores clone placement and independent caret/selection state");
+        expect(first->send(SCI_GETFIRSTVISIBLELINE) == 7 && first->send(SCI_GETXOFFSET) == 13 &&
+                   second->send(SCI_GETFIRSTVISIBLELINE) == 17 && second->send(SCI_GETXOFFSET) == 27,
+               "restart restores independent vertical and horizontal view positions");
+        restored->close();
+    }
+    qunsetenv("NPP_SESSION_DIR");
+}
+
+void testSplitterMoveIsLiveCheckpointedWithoutGracefulClose()
+{
+    QTemporaryDir root;
+    const QString sessionDir = root.filePath(QStringLiteral("splitter-session"));
+    qputenv("NPP_SESSION_DIR", sessionDir.toUtf8());
+    std::unique_ptr<QMainWindow> window(createMainWindow());
+    window->resize(1000, 500);
+    window->show();
+    processFor(40);
+    actionWithText(window.get(), QStringLiteral("Clone to Other View"))->trigger();
+    processFor(40);
+    auto *splitter = window->findChild<QSplitter *>(QStringLiteral("editorViewSplitter"));
+    auto *liveSession = window->findChild<SessionManager *>();
+    expect(splitter && liveSession, "splitter checkpoint test reaches live window state");
+    liveSession->flush();
+    splitter->setSizes({270, 730});
+    const QList<int> movedSizes = splitter->sizes();
+    splitter->splitterMoved(movedSizes.first(), 1);
+    processFor(180);
+    expect(liveSession->flush() == CheckpointStatus::Durable,
+           "splitter move debounce flushes while the window remains alive");
+
+    SessionManager crashReader(nullptr, sessionDir, 20);
+    crashReader.loadSession();
+    expect(crashReader.splitterSizes() == movedSizes,
+           "live checkpoint persists newly moved splitter sizes without graceful close");
+    window.reset();
+    qunsetenv("NPP_SESSION_DIR");
+}
+
 void testMainWindowRestartPreservesOrderActiveAndDirty()
 {
     QTemporaryDir root;
@@ -1245,6 +1399,7 @@ int main(int argc, char **argv)
         return app.exec();
     }
     testSessionRoundTripAndConflictDiagnostics();
+    testSessionLanguageAndIndependentViewStateRoundTrip();
     testDirtySnapshotReactivationKeepsLatestBytes();
     testCheckpointFailuresReturnStatusAndCanRetry();
     testMetadataFailureCannotChangeCommittedSnapshotMeaning();
@@ -1262,6 +1417,8 @@ int main(int argc, char **argv)
     testCanonicalLegacyMigrationPreservesSource();
     testHistoricalNppLinuxLocationDiscovery();
     testAtomicOrdinarySaveFailurePreservesOriginal();
+    testIndependentViewStateRestoresAcrossRestart();
+    testSplitterMoveIsLiveCheckpointedWithoutGracefulClose();
     testMainWindowRestartPreservesOrderActiveAndDirty();
     testUntitledNumberingAndDisposablePlaceholderPersistence();
     testCancelAndDiscardRecoveryLifecycle();

@@ -10,14 +10,14 @@ struct FunctionEntry {
     int line = 0;
 };
 
-QVector<FunctionEntry> parseFunctions(const QString &text, const QString &fileName);
+QVector<FunctionEntry> parseFunctions(const QString &text, const QString &languageId);
 
 class FunctionList : public QDockWidget
 {
     Q_OBJECT
 public:
     explicit FunctionList(QWidget *parent = nullptr);
-    void setDocument(const QString &text, const QString &fileName);
+    void setDocument(const QString &text, const QString &languageId);
 
 signals:
     void lineActivated(int zeroBasedLine);
@@ -25,5 +25,5 @@ signals:
 private:
     QTreeWidget *m_tree;
     QString m_text;
-    QString m_fileName;
+    QString m_languageId;
 };

@@ -289,7 +289,7 @@ void testRecoveryMetadataAndSchema3Migration()
     expect(!migrated.writesBlocked() && migrated.documents().first().encoding == TextEncoding::Utf8,
            "valid schema 3 migrates with safe UTF-8 metadata defaults");
     expect(migrated.flush() == CheckpointStatus::Durable &&
-               QJsonDocument::fromJson(readBytes(oldSession + "/session.json")).object().value("schemaVersion").toInt() == 4,
+               QJsonDocument::fromJson(readBytes(oldSession + "/session.json")).object().value("schemaVersion").toInt() == SessionManager::SchemaVersion,
            "valid schema 3 migrates automatically after conservative loading");
 
     const QString dirtySession = temporary.filePath("schema3-dirty-utf16");
@@ -369,13 +369,13 @@ void testLegacySnapshotCompatibilityAndIntegrity()
            "schema-2 fixed-name dirty snapshots canonicalize in memory before migration");
     legacyReader.setSessionLayout({id}, id);
     expect(legacyReader.flush() == CheckpointStatus::Durable,
-           "ordinary schema-2 layout flush writes snapshot before schema-4 metadata");
+           "ordinary schema-2 layout flush writes snapshot before current-schema metadata");
     const QJsonObject migratedRoot = QJsonDocument::fromJson(
         readBytes(schema2 + "/session.json")).object();
     const QJsonObject migratedDocument = migratedRoot.value("documents").toArray()
                                                    .first().toObject();
     const QString migratedSnapshot = migratedDocument.value("snapshot").toString();
-    expect(migratedRoot.value("schemaVersion").toInt() == 4 &&
+    expect(migratedRoot.value("schemaVersion").toInt() == SessionManager::SchemaVersion &&
                migratedSnapshot != fixedSnapshot && migratedSnapshot.count('-') == 1 &&
                readBytes(schema2 + "/" + migratedSnapshot) ==
                    QStringLiteral("legacy 雪\rlegacy\r").toUtf8(),

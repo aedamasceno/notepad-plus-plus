@@ -13,6 +13,7 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QFile>
+#include <QSaveFile>
 #include <QTextStream>
 #include <QtPrintSupport/QPrinter>
 #include <QtPrintSupport/QPrintDialog>
@@ -42,6 +43,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QUuid>
+#include <sys/stat.h>
 #include "ScintillaEditBase.h"
 #include "findreplace.h"
 #include "sessionmanager.h"
@@ -90,6 +92,134 @@ static DiskBaseline readDiskBaseline(const QString &path, QString *error = nullp
         return {};
     }
     return baselineForBytes(path, file.readAll());
+}
+
+static bool isValidRenameBasename(const QString &name)
+{
+    return !name.isEmpty() && name != QStringLiteral(".") && name != QStringLiteral("..") &&
+           !name.contains(QLatin1Char('/')) && !name.contains(QLatin1Char('\\')) &&
+           QFileInfo(name).fileName() == name;
+}
+
+struct FileIdentity {
+    bool valid = false;
+    QString canonicalPath;
+    quint64 device = 0;
+    quint64 inode = 0;
+    qint64 size = -1;
+    qint64 mtimeSeconds = -1;
+    qint64 mtimeNanoseconds = -1;
+    QByteArray sha256;
+
+    bool operator==(const FileIdentity &other) const {
+        return valid && other.valid && canonicalPath == other.canonicalPath &&
+               device == other.device && inode == other.inode && size == other.size &&
+               mtimeSeconds == other.mtimeSeconds &&
+               mtimeNanoseconds == other.mtimeNanoseconds && sha256 == other.sha256;
+    }
+};
+
+static FileIdentity readFileIdentity(const QString &path,
+                                     const QByteArray *expectedBytes = nullptr)
+{
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    const QString canonicalPath = QFileInfo(absolutePath).canonicalFilePath();
+    QFile file(absolutePath);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    struct stat before = {};
+    if (::fstat(file.handle(), &before) != 0 || !S_ISREG(before.st_mode))
+        return {};
+    const QByteArray bytes = file.readAll();
+    struct stat after = {};
+    if (::fstat(file.handle(), &after) != 0 || before.st_dev != after.st_dev ||
+        before.st_ino != after.st_ino || before.st_size != after.st_size ||
+        before.st_mtim.tv_sec != after.st_mtim.tv_sec ||
+        before.st_mtim.tv_nsec != after.st_mtim.tv_nsec ||
+        bytes.size() != after.st_size || (expectedBytes && bytes != *expectedBytes) ||
+        canonicalPath.isEmpty() || QFileInfo(absolutePath).canonicalFilePath() != canonicalPath)
+        return {};
+    FileIdentity identity;
+    identity.valid = true;
+    identity.canonicalPath = canonicalPath;
+    identity.device = quint64(after.st_dev);
+    identity.inode = quint64(after.st_ino);
+    identity.size = after.st_size;
+    identity.mtimeSeconds = after.st_mtim.tv_sec;
+    identity.mtimeNanoseconds = after.st_mtim.tv_nsec;
+    identity.sha256 = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
+    return identity;
+}
+
+static bool sameFileObject(const FileIdentity &left, const FileIdentity &right)
+{
+    return left.valid && right.valid && left.device == right.device &&
+           left.inode == right.inode && left.size == right.size &&
+           left.mtimeSeconds == right.mtimeSeconds &&
+           left.mtimeNanoseconds == right.mtimeNanoseconds &&
+           left.sha256 == right.sha256;
+}
+
+static bool removeFileIfIdentityMatches(const QString &path,
+                                        const FileIdentity &expected,
+                                        QString *error)
+{
+    const QFileInfo info(path);
+    const QString stagedPath = info.dir().filePath(
+        QStringLiteral(".%1.textpinnacle-delete-%2")
+            .arg(info.fileName(), QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!QFile::rename(path, stagedPath)) {
+        if (error) *error = QObject::tr("The selected file could not be isolated for deletion.");
+        return false;
+    }
+
+    const FileIdentity stagedIdentity = readFileIdentity(stagedPath);
+    if (!sameFileObject(stagedIdentity, expected)) {
+        if (!QFileInfo::exists(path) && QFile::rename(stagedPath, path)) {
+            if (error) *error = QObject::tr(
+                "The selected file changed before deletion; it was not deleted.");
+        } else if (error) {
+            *error = QObject::tr(
+                "The selected file changed before deletion and was preserved at %1.")
+                         .arg(stagedPath);
+        }
+        return false;
+    }
+
+    if (QFile::remove(stagedPath))
+        return true;
+    if (!QFileInfo::exists(path))
+        QFile::rename(stagedPath, path);
+    if (error) *error = QObject::tr("The file could not be deleted.");
+    return false;
+}
+
+static bool restoreFileIfIdentityMatches(const QString &path,
+                                         const FileIdentity &expected,
+                                         const QByteArray &bytes)
+{
+    const QFileInfo info(path);
+    const QFileDevice::Permissions permissions = info.permissions();
+    const QString stagedPath = info.dir().filePath(
+        QStringLiteral(".%1.textpinnacle-rollback-%2")
+            .arg(info.fileName(), QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!QFile::rename(path, stagedPath))
+        return false;
+    if (!sameFileObject(readFileIdentity(stagedPath), expected)) {
+        if (!QFileInfo::exists(path))
+            QFile::rename(stagedPath, path);
+        return false;
+    }
+    QSaveFile restored(path);
+    if (!restored.open(QIODevice::WriteOnly) || restored.write(bytes) != bytes.size() ||
+        !restored.commit()) {
+        if (!QFileInfo::exists(path))
+            QFile::rename(stagedPath, path);
+        return false;
+    }
+    QFile::setPermissions(path, permissions);
+    QFile::remove(stagedPath);
+    return true;
 }
 
 struct LogicalDocumentState {
@@ -171,6 +301,10 @@ public:
         m_state->explicitLanguage = language;
         applyLexer();
     }
+    void setLanguageState(const QString &language, bool automatic) {
+        m_state->explicitLanguage = automatic ? QString() : language;
+        applyLexer();
+    }
     void applyLanguage() { applyLexer(); }
     DiskBaseline diskBaseline() const { return m_state->diskBaseline; }
     void setDiskBaseline(const DiskBaseline &baseline) { m_state->diskBaseline = baseline; }
@@ -199,7 +333,8 @@ public:
         if (m_state->sessionManager && !m_state->recoveryCheckpointBlocked && !isDisposablePlaceholder()) {
             m_state->sessionManager->updateDocument(
                 {m_state->id, m_state->filePath, m_state->tabNumber, m_state->modified,
-                 m_state->encoding, m_state->eol, m_state->insertionEol},
+                 m_state->encoding, m_state->eol, m_state->insertionEol,
+                 language(), !hasExplicitLanguage()},
                 EditorUtils::text(editor));
         }
     }
@@ -587,6 +722,10 @@ public:
         m_panelContentTimer.setInterval(100);
         connect(&m_panelContentTimer, &QTimer::timeout,
                 this, &MainWindow::refreshPanelContent);
+        m_sessionLayoutTimer.setSingleShot(true);
+        m_sessionLayoutTimer.setInterval(100);
+        connect(&m_sessionLayoutTimer, &QTimer::timeout,
+                this, &MainWindow::checkpointSessionLayout);
         m_fileSearchProgressTimer.setInterval(100);
         connect(&m_fileSearchProgressTimer, &QTimer::timeout, this, [this] {
             if (m_fileSearchProgress)
@@ -640,8 +779,19 @@ public:
     bool openPath(const QString &path, QString *error = nullptr);
     bool saveCurrent(QString *error = nullptr);
     bool saveCurrentAs(const QString &path, QString *error = nullptr);
+    bool renamePath(const QString &oldPath, const QString &newPath, QString *error = nullptr);
+    bool deletePath(const QString &path, QString *error = nullptr);
     void setExternalSaveDecisionProvider(ExternalSaveDecisionProvider provider) {
         m_externalSaveDecisionProvider = std::move(provider);
+    }
+    void setCloseDecisionProvider(CloseDecisionProvider provider) {
+        m_closeDecisionProvider = std::move(provider);
+    }
+    void setFileDeleteDecisionProvider(FileDeleteDecisionProvider provider) {
+        m_fileDeleteDecisionProvider = std::move(provider);
+    }
+    void setDeletePostSaveHook(DeletePostSaveHook hook) {
+        m_deletePostSaveHook = std::move(hook);
     }
     void startFileSearch(FileSearchRequest request);
 
@@ -722,9 +872,13 @@ private:
                       int restoredUntitledNumber = 0, bool registerWithSession = true);
     void wireDocumentView(DocumentTab *tab);
     void checkpointSessionLayout();
+    void scheduleSessionLayoutCheckpoint();
     int lowestAvailableUntitledNumber() const;
     int findTabIndexForFilePath(const QString& filePath);
-    bool closeTab(int index, bool ensureOneTab = true, QTabWidget *pane = nullptr);
+    CloseDecision requestCloseDecision(DocumentTab *tab);
+    bool closeTab(int index, bool ensureOneTab = true, QTabWidget *pane = nullptr,
+                  const CloseDecision *decisionOverride = nullptr);
+    bool closeLogicalDocuments(const QStringList &documentIds);
     bool closeAllTabs();
     DocumentTab* getCurrentTab() const;
     QList<QTabWidget *> panes() const;
@@ -755,6 +909,9 @@ private:
     void loadSession();
 
     ExternalSaveDecisionProvider m_externalSaveDecisionProvider;
+    CloseDecisionProvider m_closeDecisionProvider;
+    FileDeleteDecisionProvider m_fileDeleteDecisionProvider;
+    DeletePostSaveHook m_deletePostSaveHook;
 
     QTabWidget* tabWidget;
     QTabWidget* secondaryTabWidget;
@@ -866,6 +1023,7 @@ private:
     FileBrowser* fileBrowserWidget = nullptr;
     DocumentList* documentListWidget = nullptr;
     QTimer m_panelContentTimer;
+    QTimer m_sessionLayoutTimer;
     QString m_sessionDiagnostics;
     QStringList m_documentListIds;
     bool m_loadingSession = false;
@@ -876,6 +1034,8 @@ private:
 void MainWindow::setupUI() {
     editorViewSplitter = new QSplitter(Qt::Horizontal, this);
     editorViewSplitter->setObjectName(QStringLiteral("editorViewSplitter"));
+    connect(editorViewSplitter, &QSplitter::splitterMoved, this,
+            [this](int, int) { scheduleSessionLayoutCheckpoint(); });
     secondaryTabWidget = new QTabWidget(editorViewSplitter);
     secondaryTabWidget->setObjectName(QStringLiteral("secondaryTabWidget"));
     tabWidget = new QTabWidget(editorViewSplitter);
@@ -978,6 +1138,41 @@ void MainWindow::setupUI() {
                     dualViewManager->activate(pane, i); return;
                 }
     });
+    const auto viewForDocumentListIndex = [this](int index) -> DocumentTab * {
+        if (index < 0 || index >= m_documentListIds.size()) return nullptr;
+        const QString id = m_documentListIds.at(index);
+        for (DocumentTab *view : documentViews())
+            if (view->documentId() == id) return view;
+        return nullptr;
+    };
+    connect(documentListWidget, &DocumentList::saveRequested, this,
+            [this, viewForDocumentListIndex](int index) {
+        if (DocumentTab *view = viewForDocumentListIndex(index)) {
+            QTabWidget *pane = paneFor(view);
+            dualViewManager->activate(pane, pane->indexOf(view));
+            saveTab(view);
+        }
+    });
+    connect(documentListWidget, &DocumentList::closeRequested, this,
+            [this, viewForDocumentListIndex](int index) {
+        if (DocumentTab *view = viewForDocumentListIndex(index))
+            closeLogicalDocuments({view->documentId()});
+    });
+    connect(documentListWidget, &DocumentList::closeOthersRequested, this,
+            [this](int index) {
+        if (index < 0 || index >= m_documentListIds.size()) return;
+        const QString keep = m_documentListIds.at(index);
+        const QStringList ids = m_documentListIds;
+        QStringList closeIds;
+        for (const QString &id : ids) if (id != keep) closeIds << id;
+        closeLogicalDocuments(closeIds);
+    });
+    connect(documentListWidget, &DocumentList::closeRightRequested, this,
+            [this](int index) {
+        if (index < 0 || index >= m_documentListIds.size()) return;
+        const QStringList ids = m_documentListIds.mid(index + 1);
+        closeLogicalDocuments(ids);
+    });
     connect(functionListWidget, &FunctionList::lineActivated,
             this, &MainWindow::navigateToLine);
     connect(documentMapWidget, &DocumentMap::lineActivated,
@@ -986,6 +1181,27 @@ void MainWindow::setupUI() {
         const int existing = findTabIndexForFilePath(path);
         if (existing < 0)
             createNewTab(path);
+    });
+    connect(fileBrowserWidget, &FileBrowser::renameRequested, this, [this](const QString &oldPath) {
+        bool accepted = false;
+        const QString oldName = QFileInfo(oldPath).fileName();
+        const QString newName = QInputDialog::getText(this, tr("Rename File"), tr("New name:"),
+            QLineEdit::Normal, oldName, &accepted).trimmed();
+        if (!accepted || newName.isEmpty() || newName == oldName) return;
+        if (!isValidRenameBasename(newName)) {
+            QMessageBox::warning(this, tr("Rename File"),
+                                 tr("Enter a single file name without path components."));
+            return;
+        }
+        const QString newPath = QFileInfo(oldPath).dir().filePath(newName);
+        QString error;
+        if (!renamePath(oldPath, newPath, &error))
+            QMessageBox::warning(this, tr("Rename File"), error);
+    });
+    connect(fileBrowserWidget, &FileBrowser::deleteRequested, this, [this](const QString &path) {
+        QString error;
+        if (!deletePath(path, &error) && !error.isEmpty())
+            QMessageBox::warning(this, tr("Delete File"), error);
     });
 }
 
@@ -1702,6 +1918,9 @@ void MainWindow::wireDocumentView(DocumentTab *tab)
     connect(tab->getEditor(), &ScintillaEditBase::notify, this, &MainWindow::updateStatusBar);
     connect(tab->getEditor(), &ScintillaEditBase::notify, this,
             [this, tab](Scintilla::NotificationData *notification) {
+                if (notification->nmhdr.code == Scintilla::Notification::UpdateUI &&
+                    Scintilla::FlagSet(notification->updated, Scintilla::Update::Selection))
+                    scheduleSessionLayoutCheckpoint();
                 if (tab != getCurrentTab()) return;
                 if (notification->nmhdr.code == Scintilla::Notification::Modified &&
                     (Scintilla::FlagSet(notification->modificationType,
@@ -1712,9 +1931,18 @@ void MainWindow::wireDocumentView(DocumentTab *tab)
             });
     connect(tab->getEditor(), &ScintillaEditBase::verticalScrolled, this,
             [this, tab](int) {
+                scheduleSessionLayoutCheckpoint();
                 if (tab == getCurrentTab()) refreshPanelViewport();
             });
+    connect(tab->getEditor(), &ScintillaEditBase::horizontalScrolled, this,
+            [this](int) { scheduleSessionLayoutCheckpoint(); });
     dualViewManager->connectEditor(tab->getEditor());
+}
+
+void MainWindow::scheduleSessionLayoutCheckpoint()
+{
+    if (!m_loadingSession)
+        m_sessionLayoutTimer.start();
 }
 
 int MainWindow::lowestAvailableUntitledNumber() const
@@ -1759,6 +1987,20 @@ void MainWindow::checkpointSessionLayout()
     m_sessionManager->setDualViewLayout(primaryIds, secondaryIds,
         dualViewManager->activePane() == secondaryTabWidget ? QStringLiteral("secondary") : QStringLiteral("primary"),
         editorViewSplitter->orientation(), editorViewSplitter->sizes());
+    QVector<RecoveryViewState> viewStates;
+    for (QTabWidget *pane : panes()) {
+        const QString paneName = pane == secondaryTabWidget ? QStringLiteral("secondary")
+                                                            : QStringLiteral("primary");
+        for (int i = 0; i < pane->count(); ++i) {
+            auto *tab = qobject_cast<DocumentTab *>(pane->widget(i));
+            if (!tab || tab->isDisposablePlaceholder()) continue;
+            auto *editor = tab->getEditor();
+            viewStates.push_back({tab->documentId(), paneName,
+                editor->send(SCI_GETCURRENTPOS), editor->send(SCI_GETANCHOR),
+                int(editor->send(SCI_GETFIRSTVISIBLELINE)), int(editor->send(SCI_GETXOFFSET))});
+        }
+    }
+    m_sessionManager->setViewStates(viewStates);
 }
 
 int MainWindow::findTabIndexForFilePath(const QString& filePath) {
@@ -1775,33 +2017,40 @@ int MainWindow::findTabIndexForFilePath(const QString& filePath) {
     return -1;
 }
 
-bool MainWindow::closeTab(int index, bool ensureOneTab, QTabWidget *pane) {
+CloseDecision MainWindow::requestCloseDecision(DocumentTab *tab)
+{
+    if (m_closeDecisionProvider)
+        return m_closeDecisionProvider(tab->getFilePath());
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("Save Changes");
+    msgBox.setText("The document has been modified.");
+    msgBox.setInformativeText("Do you want to save your changes?");
+    msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    msgBox.setDefaultButton(QMessageBox::Save);
+    switch (msgBox.exec()) {
+    case QMessageBox::Save: return CloseDecision::Save;
+    case QMessageBox::Discard: return CloseDecision::Discard;
+    default: return CloseDecision::Cancel;
+    }
+}
+
+bool MainWindow::closeTab(int index, bool ensureOneTab, QTabWidget *pane,
+                          const CloseDecision *decisionOverride) {
     pane = pane ? pane : dualViewManager->activePane();
     DocumentTab* tab = qobject_cast<DocumentTab*>(pane->widget(index));
     if (!tab) return false;
     const bool finalView = viewCount(tab->documentId()) == 1;
 
-    // If the tab is modified, ask user
+    // If the final view is modified, ask whether to preserve its buffer.
     if (finalView && tab->isDirty()) {
-        QMessageBox msgBox(this);
-        msgBox.setWindowTitle("Save Changes");
-        msgBox.setText("The document has been modified.");
-        msgBox.setInformativeText("Do you want to save your changes?");
-        msgBox.setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
-        msgBox.setDefaultButton(QMessageBox::Save);
-
-        int ret = msgBox.exec();
-        switch (ret) {
-            case QMessageBox::Save:
-                if (!saveTab(tab)) {
-                    return false; // Save failed, cancel closing
-                }
-                break;
-            case QMessageBox::Discard:
-                break; // Just close
-            case QMessageBox::Cancel:
-                return false; // Cancel closing
+        const CloseDecision decision = decisionOverride ? *decisionOverride
+                                                        : requestCloseDecision(tab);
+        if (decision == CloseDecision::Save) {
+            if (!saveTab(tab))
+                return false;
         }
+        if (decision == CloseDecision::Cancel)
+            return false;
     }
 
     if (finalView && m_sessionManager)
@@ -1817,6 +2066,57 @@ bool MainWindow::closeTab(int index, bool ensureOneTab, QTabWidget *pane) {
     }
     checkpointSessionLayout();
 
+    return true;
+}
+
+bool MainWindow::closeLogicalDocuments(const QStringList &documentIds)
+{
+    QVector<QPair<QString, CloseDecision>> pending;
+    pending.reserve(documentIds.size());
+    for (const QString &id : documentIds) {
+        DocumentTab *representative = nullptr;
+        for (DocumentTab *view : documentViews()) {
+            if (view->documentId() == id) {
+                representative = view;
+                break;
+            }
+        }
+        if (!representative)
+            continue;
+        CloseDecision decision = CloseDecision::Discard;
+        if (representative->isDirty()) {
+            decision = requestCloseDecision(representative);
+            if (decision == CloseDecision::Cancel)
+                return false;
+        }
+        pending.push_back(qMakePair(id, decision));
+    }
+
+    for (auto &entry : pending) {
+        if (entry.second != CloseDecision::Save)
+            continue;
+        DocumentTab *representative = nullptr;
+        for (DocumentTab *view : documentViews()) {
+            if (view->documentId() == entry.first) {
+                representative = view;
+                break;
+            }
+        }
+        if (!representative || !saveTab(representative))
+            return false;
+        entry.second = CloseDecision::Discard;
+    }
+
+    for (const auto &entry : pending) {
+        QList<DocumentTab *> matches;
+        for (DocumentTab *view : documentViews())
+            if (view->documentId() == entry.first) matches << view;
+        for (DocumentTab *view : matches) {
+            QTabWidget *pane = paneFor(view);
+            if (pane && !closeTab(pane->indexOf(view), true, pane, &entry.second))
+                return false;
+        }
+    }
     return true;
 }
 
@@ -2134,6 +2434,205 @@ bool MainWindow::openPath(const QString &path, QString *error)
     return true;
 }
 
+bool MainWindow::renamePath(const QString &oldPath, const QString &newPath, QString *error)
+{
+    const QFileInfo sourceInfo(oldPath);
+    const QFileInfo destinationInfo(newPath);
+    const QString source = sourceInfo.absoluteFilePath();
+    const QString destination = destinationInfo.absoluteFilePath();
+    if (!isValidRenameBasename(destinationInfo.fileName())) {
+        if (error) *error = tr("The destination must use a valid file name.");
+        return false;
+    }
+    if (sourceInfo.absoluteDir().absolutePath() != destinationInfo.absoluteDir().absolutePath()) {
+        if (error) *error = tr("The new name must stay in the same folder.");
+        return false;
+    }
+    if (!QFileInfo(source).isFile()) {
+        if (error) *error = tr("The source is not a file.");
+        return false;
+    }
+    if (source == destination)
+        return true;
+    if (QFileInfo::exists(destination)) {
+        if (error) *error = tr("The destination already exists.");
+        return false;
+    }
+    if (!QFile::rename(source, destination)) {
+        if (error) *error = tr("The file could not be renamed.");
+        return false;
+    }
+    QSet<QString> updated;
+    for (DocumentTab *view : documentViews()) {
+        if (QFileInfo(view->getFilePath()).absoluteFilePath() != source ||
+            updated.contains(view->documentId())) continue;
+        updated.insert(view->documentId());
+        view->setFilePath(destination);
+        view->setDiskBaseline(readDiskBaseline(destination));
+        for (DocumentTab *clone : documentViews())
+            if (clone->documentId() == view->documentId()) clone->applyLanguage();
+        view->checkpoint();
+    }
+    checkpointSessionLayout();
+    updateLanguageActions();
+    refreshPanels();
+    return true;
+}
+
+bool MainWindow::deletePath(const QString &path, QString *error)
+{
+    if (error) error->clear();
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    FileIdentity selectedIdentity = readFileIdentity(absolutePath);
+    if (!selectedIdentity.valid) {
+        if (error) *error = tr("The selected file is no longer available.");
+        return false;
+    }
+
+    const bool confirmed = m_fileDeleteDecisionProvider
+        ? m_fileDeleteDecisionProvider(absolutePath)
+        : QMessageBox::question(this, tr("Delete File"),
+              tr("Permanently delete %1?").arg(QFileInfo(absolutePath).fileName()),
+              QMessageBox::Yes | QMessageBox::Cancel,
+              QMessageBox::Cancel) == QMessageBox::Yes;
+    if (!confirmed)
+        return false;
+    if (!(readFileIdentity(absolutePath) == selectedIdentity)) {
+        if (error) *error = tr("The selected file changed before deletion; it was not deleted.");
+        return false;
+    }
+
+    QStringList matchingIds;
+    QSet<QString> seenIds;
+    for (DocumentTab *view : documentViews()) {
+        const QFileInfo viewInfo(view->getFilePath());
+        const bool samePath = viewInfo.absoluteFilePath() == absolutePath ||
+            (!selectedIdentity.canonicalPath.isEmpty() &&
+             viewInfo.canonicalFilePath() == selectedIdentity.canonicalPath);
+        if (samePath && !seenIds.contains(view->documentId())) {
+            matchingIds << view->documentId();
+            seenIds.insert(view->documentId());
+        }
+    }
+
+    QVector<QPair<QString, CloseDecision>> pending;
+    pending.reserve(matchingIds.size());
+    for (const QString &id : matchingIds) {
+        DocumentTab *representative = nullptr;
+        for (DocumentTab *view : documentViews()) {
+            if (view->documentId() == id) {
+                representative = view;
+                break;
+            }
+        }
+        CloseDecision decision = CloseDecision::Discard;
+        if (representative && representative->isDirty()) {
+            decision = requestCloseDecision(representative);
+            if (decision == CloseDecision::Cancel)
+                return false;
+            if (!(readFileIdentity(absolutePath) == selectedIdentity)) {
+                if (error) *error = tr("The selected file changed before deletion; it was not deleted.");
+                return false;
+            }
+        }
+        pending.push_back(qMakePair(id, decision));
+    }
+
+    QFile originalFile(absolutePath);
+    if (!originalFile.open(QIODevice::ReadOnly)) {
+        if (error) *error = tr("The selected file could not be read before deletion.");
+        return false;
+    }
+    const QByteArray originalBytes = originalFile.readAll();
+    originalFile.close();
+    QStringList savedIds;
+    const auto rollbackSaves = [&] {
+        const bool restored = restoreFileIfIdentityMatches(
+            absolutePath, selectedIdentity, originalBytes);
+        const DiskBaseline restoredBaseline = restored ? readDiskBaseline(absolutePath)
+                                                       : DiskBaseline{};
+        for (const QString &savedId : savedIds) {
+            for (DocumentTab *view : documentViews()) {
+                if (view->documentId() != savedId)
+                    continue;
+                view->setRecoveredDirty(true);
+                if (restored)
+                    view->setDiskBaseline(restoredBaseline);
+                view->checkpoint();
+                break;
+            }
+        }
+        checkpointSessionLayout();
+        return restored;
+    };
+
+    for (auto &entry : pending) {
+        if (entry.second != CloseDecision::Save)
+            continue;
+        DocumentTab *representative = nullptr;
+        for (DocumentTab *view : documentViews()) {
+            if (view->documentId() == entry.first) {
+                representative = view;
+                break;
+            }
+        }
+        QByteArray expectedSavedBytes;
+        QString serializationError;
+        if (!representative ||
+            !DocumentFormat::encode(EditorUtils::text(representative->getEditor()),
+                                    representative->encoding(), &expectedSavedBytes,
+                                    &serializationError)) {
+            if (!savedIds.isEmpty())
+                rollbackSaves();
+            if (error) *error = serializationError;
+            return false;
+        }
+        if (!representative || !saveTab(representative)) {
+            if (!savedIds.isEmpty() && !rollbackSaves() && error)
+                *error = tr("A later save failed and the original file could not be restored.");
+            return false;
+        }
+        savedIds << entry.first;
+        if (m_deletePostSaveHook)
+            m_deletePostSaveHook(absolutePath);
+        const FileIdentity savedIdentity = readFileIdentity(absolutePath, &expectedSavedBytes);
+        if (!savedIdentity.valid || !(readFileIdentity(absolutePath) == savedIdentity)) {
+            rollbackSaves();
+            if (error)
+                *error = tr("The selected file changed after it was saved; it was not deleted.");
+            return false;
+        }
+        selectedIdentity = savedIdentity;
+    }
+
+    if (!(readFileIdentity(absolutePath) == selectedIdentity)) {
+        if (!savedIds.isEmpty())
+            rollbackSaves();
+        if (error) *error = tr("The selected file changed before deletion; it was not deleted.");
+        return false;
+    }
+    if (!removeFileIfIdentityMatches(absolutePath, selectedIdentity, error)) {
+        if (!savedIds.isEmpty())
+            rollbackSaves();
+        return false;
+    }
+
+    const CloseDecision discardAfterDelete = CloseDecision::Discard;
+    for (const QString &id : matchingIds) {
+        QList<DocumentTab *> matches;
+        for (DocumentTab *view : documentViews())
+            if (view->documentId() == id) matches << view;
+        for (DocumentTab *view : matches) {
+            QTabWidget *pane = paneFor(view);
+            if (pane && !closeTab(pane->indexOf(view), true, pane, &discardAfterDelete)) {
+                if (error) *error = tr("The deleted file's editor could not be closed.");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool MainWindow::saveCurrent(QString *error)
 {
     DocumentTab *tab = getCurrentTab();
@@ -2282,6 +2781,7 @@ void MainWindow::loadSession() {
             }
         }
         tab->setRecoveredDirty(document.dirty);
+        tab->setLanguageState(document.languageId, document.languageAutomatic);
         if (!document.filePath.isEmpty() && !document.dirty && read.success) {
             tab->setDiskBaseline(readDiskBaseline(document.filePath));
         } else if (!document.filePath.isEmpty()) {
@@ -2315,8 +2815,6 @@ void MainWindow::loadSession() {
         if (payloadUsable && !document.dirty)
             tab->checkpoint();
     }
-    m_loadingSession = false;
-
     const QStringList restoredPrimary = m_sessionManager->primaryDocumentIds();
     const QStringList restoredSecondary = m_sessionManager->secondaryDocumentIds();
     if (!restoredPrimary.isEmpty() || !restoredSecondary.isEmpty()) {
@@ -2344,9 +2842,25 @@ void MainWindow::loadSession() {
         if (m_sessionManager->splitterSizes().size() == 2)
             editorViewSplitter->setSizes(m_sessionManager->splitterSizes());
         dualViewManager->updatePaneVisibility();
+        for (const RecoveryViewState &state : m_sessionManager->viewStates()) {
+            QTabWidget *pane = state.pane == QStringLiteral("secondary")
+                                   ? secondaryTabWidget : tabWidget;
+            for (int i = 0; i < pane->count(); ++i) {
+                auto *view = qobject_cast<DocumentTab *>(pane->widget(i));
+                if (!view || view->documentId() != state.documentId) continue;
+                auto *editor = view->getEditor();
+                const qint64 length = editor->send(SCI_GETTEXTLENGTH);
+                editor->send(SCI_SETSEL, qBound<qint64>(0, state.anchor, length),
+                              qBound<qint64>(0, state.position, length));
+                editor->send(SCI_SETFIRSTVISIBLELINE, state.firstVisibleLine);
+                editor->send(SCI_SETXOFFSET, state.xOffset);
+                break;
+            }
+        }
         dualViewManager->activate(m_sessionManager->activePane() == QStringLiteral("secondary") && secondaryTabWidget->count()
                                       ? secondaryTabWidget : tabWidget);
     }
+    m_loadingSession = false;
 
     if (tabWidget->count() + secondaryTabWidget->count() == 0)
         createNewTab();
@@ -2370,6 +2884,7 @@ void MainWindow::loadSession() {
         dualViewManager->activate(chosenPane, activeIndex);
         checkpointSessionLayout();
         updateStatusBar();
+        updateLanguageActions();
     }
 }
 
@@ -2614,7 +3129,9 @@ void MainWindow::selectLanguage(const QString &language)
     for (DocumentTab *view : documentViews())
         if (view->documentId() == tab->documentId())
             EditorPreferencesStore::apply(view->getEditor(), m_preferences);
+    tab->checkpoint();
     updateLanguageActions();
+    refreshPanelContent();
 }
 
 void MainWindow::applyPreferences(const EditorPreferences &preferences)
@@ -2785,7 +3302,7 @@ void MainWindow::refreshPanelContent()
 
     const QString content = QString::fromUtf8(EditorUtils::text(tab->getEditor()));
     if (functionListWidget->isVisible())
-        functionListWidget->setDocument(content, tab->getFilePath());
+        functionListWidget->setDocument(content, tab->language());
     if (documentMapWidget->isVisible()) {
         const DocumentViewport viewport = EditorUtils::documentViewport(tab->getEditor());
         documentMapWidget->setDocument(content, viewport.firstLine, viewport.lineCount);
@@ -3033,11 +3550,51 @@ bool saveCurrentFileAsInMainWindow(QMainWindow *window, const QString &path, QSt
     return mainWindow->saveCurrentAs(path, error);
 }
 
+bool renameFileInMainWindow(QMainWindow *window, const QString &oldPath,
+                            const QString &newPath, QString *error)
+{
+    auto *mainWindow = qobject_cast<MainWindow *>(window);
+    if (!mainWindow) {
+        if (error) *error = QStringLiteral("Invalid main window");
+        return false;
+    }
+    return mainWindow->renamePath(oldPath, newPath, error);
+}
+
+bool deleteFileInMainWindow(QMainWindow *window, const QString &path, QString *error)
+{
+    auto *mainWindow = qobject_cast<MainWindow *>(window);
+    if (!mainWindow) {
+        if (error) *error = QStringLiteral("Invalid main window");
+        return false;
+    }
+    return mainWindow->deletePath(path, error);
+}
+
+void setCloseDecisionProvider(QMainWindow *window, CloseDecisionProvider provider)
+{
+    if (auto *mainWindow = qobject_cast<MainWindow *>(window))
+        mainWindow->setCloseDecisionProvider(std::move(provider));
+}
+
+void setFileDeleteDecisionProvider(QMainWindow *window,
+                                   FileDeleteDecisionProvider provider)
+{
+    if (auto *mainWindow = qobject_cast<MainWindow *>(window))
+        mainWindow->setFileDeleteDecisionProvider(std::move(provider));
+}
+
 void setExternalSaveDecisionProvider(QMainWindow *window,
                                      ExternalSaveDecisionProvider provider)
 {
     if (auto *mainWindow = qobject_cast<MainWindow *>(window))
         mainWindow->setExternalSaveDecisionProvider(std::move(provider));
+}
+
+void setDeletePostSaveHook(QMainWindow *window, DeletePostSaveHook hook)
+{
+    if (auto *mainWindow = qobject_cast<MainWindow *>(window))
+        mainWindow->setDeletePostSaveHook(std::move(hook));
 }
 
 void startFileSearchInMainWindow(QMainWindow *window, const FileSearchRequest &request)

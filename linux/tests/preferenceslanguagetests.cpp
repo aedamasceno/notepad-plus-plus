@@ -345,6 +345,42 @@ void testToolbarViewSettingsStayGlobal()
            "new editors inherit toolbar-updated view settings");
 }
 
+void testLanguageStateSurvivesCleanAndDirtyRecovery()
+{
+    QSettings().clear();
+    QTemporaryDir root;
+    qputenv("NPP_SESSION_DIR", root.filePath("session").toUtf8());
+    const QString cpp = root.filePath("named.cpp");
+    writeFile(cpp, "int main() {}\n");
+    {
+        std::unique_ptr<QMainWindow> window(createMainWindow());
+        QString error;
+        expect(openFileInMainWindow(window.get(), cpp, &error), "language recovery fixture opens");
+        action(window.get(), "languagePythonAction")->trigger();
+        auto *primary = window->findChild<QTabWidget *>("primaryTabWidget");
+        const QByteArray dirty("def recovered():\n    pass\n");
+        editorAt(primary)->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(dirty.constData()));
+        window->close();
+    }
+    {
+        std::unique_ptr<QMainWindow> restored(createMainWindow());
+        expect(action(restored.get(), "languagePythonAction")->isChecked(),
+               "explicit language survives dirty recovery");
+        const QString json = root.filePath("renamed.json");
+        QString error;
+        expect(saveCurrentFileAsInMainWindow(restored.get(), json, &error) &&
+                   action(restored.get(), "languagePythonAction")->isChecked(),
+               "restored explicit language survives Save As");
+        restored->close();
+    }
+    {
+        std::unique_ptr<QMainWindow> clean(createMainWindow());
+        expect(action(clean.get(), "languagePythonAction")->isChecked(),
+               "explicit language survives a clean session restart");
+        clean->close();
+    }
+}
+
 }
 
 int main(int argc, char **argv)
@@ -360,6 +396,7 @@ int main(int argc, char **argv)
     testLanguageCatalogAndLexerCreation();
     testPreferencesDialogApplyCancelAndEditorLifecycle();
     testLanguageWorkflow();
+    testLanguageStateSurvivesCleanAndDirtyRecovery();
     testToolbarViewSettingsStayGlobal();
     return failures == 0 ? 0 : 1;
 }

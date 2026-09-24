@@ -27,6 +27,10 @@ public:
 
 signals:
     void documentActivated(int index);
+    void saveRequested(int index);
+    void closeRequested(int index);
+    void closeOthersRequested(int index);
+    void closeRightRequested(int index);
 
 private:
     QListWidget *m_list;

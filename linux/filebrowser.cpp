@@ -1,6 +1,7 @@
 #include "filebrowser.h"
 
 #include <QDir>
+#include <QAction>
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QPushButton>
@@ -34,6 +35,34 @@ FileBrowser::FileBrowser(QWidget *parent)
             setRootPath(directory.absolutePath());
     });
     connect(m_tree, &QTreeView::doubleClicked, this, &FileBrowser::activateItem);
+    m_tree->setContextMenuPolicy(Qt::ActionsContextMenu);
+    QAction *refresh = new QAction(tr("Refresh"), m_tree);
+    refresh->setObjectName(QStringLiteral("fileBrowserRefreshAction"));
+    QAction *rename = new QAction(tr("Rename…"), m_tree);
+    rename->setObjectName(QStringLiteral("fileBrowserRenameAction"));
+    QAction *remove = new QAction(tr("Delete…"), m_tree);
+    remove->setObjectName(QStringLiteral("fileBrowserDeleteAction"));
+    m_tree->addActions({refresh, rename, remove});
+    connect(refresh, &QAction::triggered, this, [this] {
+        if (!m_rootPath.isEmpty()) {
+            const QModelIndex root = m_model->setRootPath(m_rootPath);
+            m_tree->setRootIndex(root);
+        }
+    });
+    connect(rename, &QAction::triggered, this, [this] {
+        const QString path = selectedFilePath();
+        if (!path.isEmpty()) emit renameRequested(path);
+    });
+    connect(remove, &QAction::triggered, this, [this] {
+        const QString path = selectedFilePath();
+        if (!path.isEmpty()) emit deleteRequested(path);
+    });
+}
+
+QString FileBrowser::selectedFilePath() const
+{
+    const QFileInfo info = m_model->fileInfo(m_tree->currentIndex());
+    return info.isFile() ? info.absoluteFilePath() : QString();
 }
 
 bool FileBrowser::setRootPath(const QString &path)

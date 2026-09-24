@@ -15,10 +15,13 @@ public:
 signals:
     void fileActivated(const QString &filePath);
     void rootPathChanged(const QString &rootPath);
+    void renameRequested(const QString &filePath);
+    void deleteRequested(const QString &filePath);
 
 private:
     void chooseRoot();
     void activateItem(const QModelIndex &index);
+    QString selectedFilePath() const;
     QFileSystemModel *m_model;
     QTreeView *m_tree;
     QString m_rootPath;
