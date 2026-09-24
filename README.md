@@ -18,7 +18,7 @@ TextPinnacle builds on the open-source Notepad++ codebase while maintaining its 
 
 ## Screenshot
 
-![TextPinnacle](docs/images/notepad-plus-plus-linux.png)
+![TextPinnacle](docs/images/textpinnacle-linux.png)
 
 ## Why This Project Exists
 
