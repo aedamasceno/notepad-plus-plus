@@ -1,4 +1,4 @@
-# Notepad++ Native Linux Port
+# TextPinnacle
 
 ## Bringing the Notepad++ experience natively to Linux
 
@@ -85,7 +85,7 @@ cmake --build build-linux -j$(nproc)
 Run the application with:
 
 ```bash
-./build-linux/npp_linux
+./build-linux/linux/textpinnacle
 ```
 
 ## Current Development Priorities

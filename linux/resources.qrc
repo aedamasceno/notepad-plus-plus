@@ -30,6 +30,7 @@
     <file alias="saverecord.ico">../PowerEditor/src/icons/light/toolbar/regular/saverecord_off.ico</file>
     <file alias="syncv.ico">../PowerEditor/src/icons/light/toolbar/regular/syncV_off.ico</file>
     <file alias="synch.ico">../PowerEditor/src/icons/light/toolbar/regular/syncH_off.ico</file>
-    <file alias="app.ico">../PowerEditor/src/icons/npp.ico</file>
+    <!-- Add the final product icon here as app.png when
+         packaging/textpinnacle.png is supplied. -->
   </qresource>
 </RCC>

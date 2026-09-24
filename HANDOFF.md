@@ -44,7 +44,9 @@ ${QStandardPaths::AppDataLocation}/notepad++/sessions/
   snapshots/<sha256(document-id)>-<sha256(content)>.snapshot
 ```
 
-`AppDataLocation` includes the platform-specific organization/application component. The shipped Linux entry point sets organization `Notepad++` and application `Notepad++ Linux`; changing either changes the resolved prefix. Tests bypass that variability with `NPP_SESSION_DIR` and isolated `QSettings` directories.
+`AppDataLocation` includes the platform-specific organization/application component. The shipped Linux entry point now sets both organization and application to `TextPinnacle`, so canonical recovery data resolves under the TextPinnacle application-data prefix. Tests bypass that variability with `NPP_SESSION_DIR` and isolated `QSettings` directories.
+
+On the first launch under the TextPinnacle identity, application settings are copied once from the former `Notepad++` / `Notepad++ Linux` QSettings store. Values already present in the TextPinnacle store are preserved, and a completion marker prevents later legacy changes from being re-imported. The legacy recovery-directory probes below remain unchanged for session compatibility.
 
 `session.json` schema version 2 stores:
 
@@ -103,12 +105,12 @@ Durable captured output:
 - Independent review issue 3: `/tmp/npp-review-3-red.txt` failed both later-readable legacy duplicate assertions; `/tmp/npp-review-3-green.txt` passed after successful-read deduplication.
 - Final independent-review blocker: `/tmp/npp-review-final-red.txt` failed the write-block, rejected-update, and blocked-shutdown assertions when existing metadata could not be opened; `/tmp/npp-review-final-green.txt` passed after metadata open failure began blocking writes while preserving the existing metadata object.
 
-### Final verification
+### Current verification
 
-Actual results after final correction `b9c46c63c`:
+Actual results for the current working tree:
 
-- Configure and clean serial build: succeeded for `npp_linux`, `linux_panel_tests`, and `linux_recovery_tests`; the existing non-fatal missing CUPS development-files note remains.
-- CTest: `2/2` passed, `0` failed, in 3.42 seconds.
+- Configure and clean serial build: succeeded for `textpinnacle` and all eight test executables; the existing non-fatal missing CUPS development-files note remains.
+- CTest: `8/8` passed, `0` failed, in 8.69 seconds.
 - Focused panel executable: `All Linux panel tests passed`.
 - Focused recovery executable: `All Linux recovery tests passed`; final-correction output is captured in `/tmp/npp-review-final-green.txt`.
 - Focused failed-shutdown path (`--failed-shutdown-test`): passed.

@@ -842,7 +842,7 @@ void MainWindow::setupUI() {
     dualViewManager = new DualViewManager(editorViewSplitter, tabWidget, secondaryTabWidget, this);
 
     // Set window title
-    setWindowTitle("Notepad++");
+    setWindowTitle("TextPinnacle");
 
     // Create status bar
     statusBar = new QStatusBar(this);
@@ -1963,7 +1963,7 @@ bool MainWindow::saveCurrentAs(const QString &path, QString *error)
 }
 
 void MainWindow::updateWindowTitle() {
-    setWindowTitle("Notepad++");
+    setWindowTitle("TextPinnacle");
 }
 
 // Close actions implementation

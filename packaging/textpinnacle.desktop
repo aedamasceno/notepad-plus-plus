@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=TextPinnacle
+GenericName=Text Editor
+Comment=Native Linux text and source-code editor
+Exec=textpinnacle %F
+Icon=textpinnacle
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;
+StartupNotify=true

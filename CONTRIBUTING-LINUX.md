@@ -4,13 +4,13 @@ This is an independent, unofficial port of Notepad++ using Qt 6, Scintilla, and 
 
 ## Where to participate
 
-Report Linux-port bugs and propose changes in [this repository](https://github.com/aedamasceno/notepad-plus-plus/issues). Please do not send port-specific reports to the upstream Windows project's tracker.
+Report Linux-port bugs and propose changes in [this repository](https://github.com/aedamasceno/textpinnacle/issues). Please do not send port-specific reports to the upstream Windows project's tracker.
 
 The existing CONTRIBUTING.md contains upstream contribution guidance. For changes to this Linux fork, use this guide and target the `linux-port` branch.
 
 ## Try the alpha
 
-Visit [Releases](https://github.com/aedamasceno/notepad-plus-plus/releases) for the published Fedora RPM and installation instructions. The published package was built and tested on Fedora 44 x86_64. Other distributions need separate validation. Test with disposable files or copies of documents.
+Visit [Releases](https://github.com/aedamasceno/textpinnacle/releases) for the published Fedora RPM and installation instructions. The published package was built and tested on Fedora 44 x86_64. Other distributions need separate validation. Test with disposable files or copies of documents.
 
 A release and the latest development branch can have different behavior. Include your release version or commit hash in reports.
 
