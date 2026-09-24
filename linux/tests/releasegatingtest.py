@@ -19,6 +19,11 @@ for required in (
     "desktop-file-validate", "appstream-util validate-relax",
     "textpinnacle.desktop", "textpinnacle.png",
     "io.github.aedamasceno.textpinnacle.metainfo.xml",
+    "useradd --create-home", "textpinnacle-ci", "runuser --user textpinnacle-ci",
+    "HOME=/home/textpinnacle-ci", "TMPDIR=/tmp/textpinnacle-ci",
 ):
     assert required in workflow, f"Linux workflow missing: {required}"
+assert workflow.index("runuser --user textpinnacle-ci") < workflow.index(
+    "ctest --test-dir build-linux --output-on-failure"
+), "CTest must execute through the unprivileged CI user"
 print("Linux release gates are present")

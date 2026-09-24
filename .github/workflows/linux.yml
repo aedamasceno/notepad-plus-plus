@@ -25,19 +25,28 @@ jobs:
     steps:
       - name: Install build and validation tools
         run: >-
-          dnf install -y git gcc-c++ cmake ninja-build python3
+          dnf install -y git gcc-c++ cmake ninja-build python3 shadow-utils
           qt6-qtbase-devel qt6-qt5compat-devel
           desktop-file-utils libappstream-glib
+      - name: Create unprivileged test user
+        run: |
+          useradd --create-home --shell /bin/bash textpinnacle-ci
+          install -d -o textpinnacle-ci -g textpinnacle-ci -m 0700 /tmp/textpinnacle-ci
       - name: Check out source
         uses: actions/checkout@v6
       - name: Configure Debug with tests
         run: cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
       - name: Build
         run: cmake --build build-linux --parallel 2
-      - name: Run complete CTest suite
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build-linux --output-on-failure
+      - name: Run complete CTest suite as unprivileged user
+        run: |
+          chown -R textpinnacle-ci:textpinnacle-ci "$GITHUB_WORKSPACE"
+          chmod -R u+rwX,go+rX "$GITHUB_WORKSPACE"
+          runuser --user textpinnacle-ci -- env \
+            HOME=/home/textpinnacle-ci \
+            TMPDIR=/tmp/textpinnacle-ci \
+            QT_QPA_PLATFORM=offscreen \
+            ctest --test-dir build-linux --output-on-failure
       - name: Verify application artifact
         run: test -x build-linux/linux/textpinnacle
       - name: Stage install
